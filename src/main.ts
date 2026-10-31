@@ -9,7 +9,7 @@ import { cellsOf, shapeOf } from './sim/build';
 import { Terrain } from './sim/map';
 import { restoreWorld, serializeWorld } from './sim/serialize';
 import { World, gameTime } from './sim/world';
-import { Hud } from './ui/hud';
+import { Hud, type MenuItem } from './ui/hud';
 import { TopBar } from './ui/topbar';
 
 registerSW({ immediate: true });
@@ -193,7 +193,7 @@ const gestures = attachGestures(canvas, {
     const c = cellAt(sx, sy);
     if (!world.map.inBounds(c.x, c.y)) return;
     const idx = c.y * world.map.width + c.x;
-    const items: { label: string; action: () => void }[] = [];
+    const items: MenuItem[] = [];
     if (selectedId !== null && world.map.isPassable(c.x, c.y)) {
       const id = selectedId;
       items.push({
@@ -210,6 +210,11 @@ const gestures = attachGestures(canvas, {
       const order = t === Terrain.Tree ? 'chop' : 'mine';
       if (d) items.push({ label: 'Отменить приказ', action: cancel });
       else items.push({ label: t === Terrain.Tree ? 'Рубить' : 'Добывать', action: () => void world.applyOrder(order, c.x, c.y, c.x, c.y) });
+    }
+    const roomId = world.rooms().roomOf[idx]!;
+    if (roomId >= 0) {
+      const r = world.rooms().rooms[roomId]!;
+      items.push({ label: `Комната: ${r.cells.length} кл., кроватей: ${r.beds.length}`, action: () => {}, info: true });
     }
     if (world.blueprints.has(idx)) items.push({ label: 'Отменить чертёж', action: cancel });
     else if (world.hasBuilt(idx)) {
@@ -267,7 +272,7 @@ function frame(now: number): void {
     void save(); // автосейв раз в игровые сутки
   }
 
-  renderer.draw(world, camera, alpha, { selectedId, preview });
+  renderer.draw(world, camera, alpha, { selectedId, preview, showRooms: hud.buildOpen });
   hud.update(now);
 
   const t = gameTime(world.tickCount);

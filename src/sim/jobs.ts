@@ -4,9 +4,11 @@ import {
   BUILD_WAIT_LIMIT,
   BUSH_REGROW_TICKS,
   CARRY_MAX,
+  COOK,
   CROP,
   DECONSTRUCT,
   FOOD_VALUE,
+  MOOD,
   NEEDS,
   STONE_PER_ROCK,
   WOOD_PER_TREE,
@@ -14,6 +16,7 @@ import {
 } from './balance';
 import { blocksMovement, kindOfStructure, type BuildKind } from './build';
 import { isFood, type ItemKind } from './items';
+import { addThought } from './mood';
 import { Structure, Terrain } from './map';
 import { findPath, findPathToAny, pathCost, type Point } from './pathfinding';
 import { originOf, stepMovement, workSpeed, type Pawn, type SkillId } from './pawn';
@@ -35,7 +38,7 @@ export type WorkType =
 export const WORK_TYPES: readonly WorkType[] = [
   'firefighting', 'doctor', 'cooking', 'hunting', 'construction', 'plants', 'mining', 'crafting', 'hauling', 'cleaning', 'research',
 ];
-export const IMPLEMENTED_WORKS: readonly WorkType[] = ['construction', 'plants', 'mining', 'hauling'];
+export const IMPLEMENTED_WORKS: readonly WorkType[] = ['construction', 'cooking', 'plants', 'mining', 'hauling'];
 
 export type JobKind =
   | 'chop'
@@ -47,9 +50,11 @@ export type JobKind =
   | 'deliver'
   | 'build'
   | 'deconstruct'
+  | 'cook'
   | 'eat'
   | 'sleep'
   | 'relax'
+  | 'wander'
   | 'goto';
 type Phase = 'move' | 'act' | 'move2' | 'act2';
 
@@ -82,7 +87,7 @@ export interface Plan {
 
 /** Задачи, которые можно прервать срочной нуждой. */
 export const WORK_JOB_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
-  'chop', 'mine', 'harvest', 'sow', 'reap', 'haul', 'deliver', 'build', 'deconstruct',
+  'chop', 'mine', 'harvest', 'sow', 'reap', 'haul', 'deliver', 'build', 'deconstruct', 'cook',
 ]);
 
 const NEIGHBORS: readonly (readonly [number, number])[] = [
@@ -366,7 +371,47 @@ function cheaper(a: Plan | null, b: Plan | null): Plan | null {
   return b.cost < a.cost ? b : a;
 }
 
+/** Готовка: несём сырую еду из ближайшей стопки к свободной плите и варим обеды. */
+function planCook(world: World, pawn: Pawn): Plan | null {
+  if (world.mealCount() >= COOK.mealTarget) return null;
+  const stoves = world.cellsWith(Structure.Stove).filter((i) => world.isFree(Layer.Dest, i, pawn.id));
+  if (stoves.length === 0) return null;
+  const stacks: number[] = [];
+  for (const [idx, s] of world.items.stacks) {
+    if ((s.kind === 'berries' || s.kind === 'rice') && s.count >= COOK.raw && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
+  }
+  return bestOf(
+    stacks,
+    (idx) => pointOf(world, idx),
+    originOf(pawn),
+    (idx) => {
+      const target = pointOf(world, idx);
+      let stove = -1;
+      let bestD = Infinity;
+      for (const sidx of stoves) {
+        const p = pointOf(world, sidx);
+        const d = octile(p.x - target.x, p.y - target.y);
+        if (d < bestD) {
+          bestD = d;
+          stove = sidx;
+        }
+      }
+      const dest = pointOf(world, stove);
+      if (!findPathToAny(world.map, target.x, target.y, adjacentPassable(world, dest))) return null;
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'cook', phase: 'move', target, dest, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Item, idx], [Layer.Dest, stove]],
+      };
+    },
+  );
+}
+
 const PLANNERS: Partial<Record<WorkType, (world: World, pawn: Pawn) => Plan | null>> = {
+  cooking: planCook,
   plants: (w, p) => cheaper(cheaper(planDesignation(w, p, 'chop'), planHarvest(w, p)), cheaper(planReap(w, p), planSow(w, p))),
   mining: (w, p) => planDesignation(w, p, 'mine'),
   construction: (w, p) =>
@@ -390,26 +435,27 @@ export function planWork(world: World, pawn: Pawn): Plan | null {
 // ---------- планирование: нужды ----------
 
 export function planEat(world: World, pawn: Pawn): Plan | null {
-  const stacks: number[] = [];
+  const meals: number[] = [];
+  const raws: number[] = [];
   for (const [idx, s] of world.items.stacks) {
-    if (isFood(s.kind) && s.count > 0 && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
+    if (!isFood(s.kind) || s.count <= 0 || !world.isFree(Layer.Item, idx, pawn.id)) continue;
+    (s.kind === 'meal' ? meals : raws).push(idx);
   }
-  const fromStack = bestOf(
-    stacks,
-    (idx) => pointOf(world, idx),
-    originOf(pawn),
-    (idx) => {
-      const target = pointOf(world, idx);
-      const r = route(world, pawn, [target]);
-      if (!r) return null;
-      return {
-        job: { kind: 'eat', phase: 'move', target, source: 'stack', progress: 0, duration: 0 },
-        path: r.path,
-        cost: r.cost,
-        reserve: [[Layer.Item, idx]],
-      };
-    },
-  );
+  const eatFromStack = (idx: number): Plan | null => {
+    const target = pointOf(world, idx);
+    const r = route(world, pawn, [target]);
+    if (!r) return null;
+    return {
+      job: { kind: 'eat', phase: 'move', target, source: 'stack', progress: 0, duration: 0 },
+      path: r.path,
+      cost: r.cost,
+      reserve: [[Layer.Item, idx]],
+    };
+  };
+  // готовую еду предпочитаем сырой
+  const fromStack =
+    bestOf(meals, (idx) => pointOf(world, idx), originOf(pawn), eatFromStack) ??
+    bestOf(raws, (idx) => pointOf(world, idx), originOf(pawn), eatFromStack);
   if (fromStack) return fromStack;
 
   const bushes: number[] = [];
@@ -446,6 +492,53 @@ function planStay(pawn: Pawn, kind: 'sleep' | 'relax'): Plan {
   };
 }
 
+/** Сон: в закреплённой (или свободной) кровати, иначе на полу там, где стоит. */
+export function planSleep(world: World, pawn: Pawn): Plan {
+  let bed = pawn.ownedBed;
+  if (bed !== null && world.map.structure[bed] !== Structure.Bed) {
+    pawn.ownedBed = null; // кровать разобрали
+    bed = null;
+  }
+  if (bed === null) {
+    const taken = new Set(world.pawns.map((p) => p.ownedBed));
+    const o = originOf(pawn);
+    let bestD = Infinity;
+    for (const idx of world.cellsWith(Structure.Bed)) {
+      if (taken.has(idx)) continue;
+      const p = pointOf(world, idx);
+      const d = octile(p.x - o.x, p.y - o.y);
+      if (d < bestD) {
+        bestD = d;
+        bed = idx;
+      }
+    }
+  }
+  if (bed !== null) {
+    const target = pointOf(world, bed);
+    const r = route(world, pawn, [target]);
+    if (r) {
+      pawn.ownedBed = bed;
+      return { job: { kind: 'sleep', phase: 'move', target, progress: 0, duration: 0 }, path: r.path, cost: r.cost, reserve: [] };
+    }
+  }
+  return planStay(pawn, 'sleep');
+}
+
+/** Блуждание во время срыва: случайная клетка рядом и пауза. */
+export function planWander(world: World, pawn: Pawn): Plan {
+  const o = originOf(pawn);
+  for (let i = 0; i < 8; i++) {
+    const x = o.x + world.rng.int(-MOOD.wanderRadius, MOOD.wanderRadius);
+    const y = o.y + world.rng.int(-MOOD.wanderRadius, MOOD.wanderRadius);
+    if (!world.map.isPassable(x, y)) continue;
+    const r = route(world, pawn, [{ x, y }]);
+    if (r) return { job: { kind: 'wander', phase: 'move', target: { x, y }, progress: 0, duration: 0 }, path: r.path, cost: r.cost, reserve: [] };
+  }
+  const stay = planStay(pawn, 'relax');
+  stay.job.kind = 'wander';
+  return stay;
+}
+
 /** Срочные нужды: еда, затем сон, затем отдых. */
 export function planUrgent(world: World, pawn: Pawn): Plan | null {
   const n = pawn.needs;
@@ -453,7 +546,7 @@ export function planUrgent(world: World, pawn: Pawn): Plan | null {
     const p = planEat(world, pawn);
     if (p) return p;
   }
-  if (n.sleep < NEEDS.sleepUrgent) return planStay(pawn, 'sleep');
+  if (n.sleep < NEEDS.sleepUrgent) return planSleep(world, pawn);
   if (n.rest < NEEDS.restUrgent) return planStay(pawn, 'relax');
   return null;
 }
@@ -465,7 +558,7 @@ export function planCritical(world: World, pawn: Pawn): Plan | null {
     const p = planEat(world, pawn);
     if (p) return p;
   }
-  if (n.sleep <= NEEDS.sleepCritical) return planStay(pawn, 'sleep');
+  if (n.sleep <= NEEDS.sleepCritical) return planSleep(world, pawn);
   return null;
 }
 
@@ -554,6 +647,10 @@ function stillValid(world: World, job: Job): boolean {
       const bp = world.blueprints.get(idx);
       return !!bp && bp.delivered >= BUILD[bp.kind].count;
     }
+    case 'cook':
+      if (world.map.structure[idxOf(world, job.dest!)] !== Structure.Stove) return false;
+      if (job.phase === 'move2' || job.phase === 'act2') return true;
+      return (world.items.stacks.get(idx)?.count ?? 0) >= COOK.raw;
     case 'deliver': {
       if (!world.blueprints.has(idxOf(world, job.dest!))) return false;
       if (job.phase === 'move2' || job.phase === 'act2') return true;
@@ -584,6 +681,8 @@ function skillOf(kind: JobKind): SkillId | null {
     case 'deliver':
     case 'deconstruct':
       return 'construction';
+    case 'cook':
+      return 'cooking';
     default:
       return null;
   }
@@ -637,13 +736,18 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
     }
     case 'haul':
     case 'deliver':
+    case 'cook':
       if (job.phase === 'move') {
         job.phase = 'act';
         job.duration = WORK_TICKS.pickup;
       } else {
         job.phase = 'act2';
-        job.duration = WORK_TICKS.drop;
+        job.duration = job.kind === 'cook' ? COOK.ticks / speed : WORK_TICKS.drop;
       }
+      return;
+    case 'wander':
+      job.phase = 'act';
+      job.duration = world.rng.int(MOOD.wanderPauseMin, MOOD.wanderPauseMax);
       return;
     case 'eat':
       job.phase = 'act';
@@ -673,6 +777,7 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
       world.designations.delete(idx);
       world.markDirty(idx);
       world.items.drop('stone', STONE_PER_ROCK, x, y);
+      world.invalidateRooms();
       endJob(world, pawn);
       return;
     case 'deconstruct':
@@ -720,13 +825,18 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
         }
       }
       pawn.needs.food = Math.min(100, pawn.needs.food + eaten * value);
+      if (eaten > 0) addThought(pawn, value === FOOD_VALUE.meal ? 'ateMeal' : 'ateRaw', world.tickCount);
       endJob(world, pawn);
       return;
     }
     case 'haul':
     case 'deliver':
+    case 'cook':
       if (job.phase === 'act') pickUp(world, pawn, job);
       else dropAtDest(world, pawn, job);
+      return;
+    case 'wander':
+      endJob(world, pawn);
       return;
     default:
       return;
@@ -743,7 +853,9 @@ function pickUp(world: World, pawn: Pawn, job: Job): void {
     return;
   }
   let limit: number;
-  if (job.kind === 'deliver') {
+  if (job.kind === 'cook') {
+    limit = stack.count >= COOK.raw ? COOK.raw : 0;
+  } else if (job.kind === 'deliver') {
     const bp = world.blueprints.get(destIdx);
     if (!bp) {
       endJob(world, pawn);
@@ -761,13 +873,16 @@ function pickUp(world: World, pawn: Pawn, job: Job): void {
   const kind = stack.kind;
   pawn.carrying = { kind, count: world.items.take(idx, amount) };
   world.release(Layer.Item, idx, pawn.id);
-  const path = findPath(world.map, pawn.cx, pawn.cy, dest.x, dest.y);
+  const path =
+    job.kind === 'cook'
+      ? findPathToAny(world.map, pawn.cx, pawn.cy, adjacentPassable(world, dest))
+      : findPath(world.map, pawn.cx, pawn.cy, dest.x, dest.y);
   if (!path) {
     endJob(world, pawn); // ношу уронит cancelJob
     return;
   }
   pawn.path = path;
-  pawn.target = dest;
+  pawn.target = path.length > 0 ? path[path.length - 1]! : null;
   job.phase = 'move2';
   job.progress = 0;
   job.duration = 0;
@@ -775,6 +890,13 @@ function pickUp(world: World, pawn: Pawn, job: Job): void {
 
 function dropAtDest(world: World, pawn: Pawn, job: Job): void {
   const c = pawn.carrying;
+  if (job.kind === 'cook') {
+    // сырьё израсходовано, у плиты появляются обеды
+    pawn.carrying = null;
+    if (c) world.items.drop('meal', COOK.meals, pawn.cx, pawn.cy);
+    endJob(world, pawn);
+    return;
+  }
   if (c) {
     const dest = job.dest!;
     let left = c.count;
@@ -815,6 +937,19 @@ function actBuild(world: World, pawn: Pawn, job: Job): void {
   endJob(world, pawn);
 }
 
+/** Мысли после сна: пол, кровать, своя спальня. */
+function onWake(world: World, pawn: Pawn): void {
+  const idx = pawn.cy * world.map.width + pawn.cx;
+  if (world.map.structure[idx] !== Structure.Bed) {
+    addThought(pawn, 'sleptOnFloor', world.tickCount);
+    return;
+  }
+  addThought(pawn, 'sleptInBed', world.tickCount);
+  const rooms = world.rooms();
+  const id = rooms.roomOf[idx]!;
+  if (id >= 0 && rooms.rooms[id]!.beds.length === 1) addThought(pawn, 'ownBedroom', world.tickCount);
+}
+
 export function endJob(world: World, pawn: Pawn): void {
   cancelJob(world, pawn);
 }
@@ -846,7 +981,10 @@ export function runJob(world: World, pawn: Pawn): void {
 
   job.progress++;
   if (job.kind === 'sleep') {
-    if (pawn.needs.sleep >= NEEDS.sleepWake) endJob(world, pawn);
+    if (pawn.needs.sleep >= NEEDS.sleepWake) {
+      onWake(world, pawn);
+      endJob(world, pawn);
+    }
   } else if (job.kind === 'relax') {
     if (pawn.needs.rest >= NEEDS.relaxUntil) endJob(world, pawn);
   } else if (job.progress >= job.duration) {

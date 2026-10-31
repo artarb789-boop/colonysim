@@ -25,11 +25,13 @@ const COLORS = {
   berry: '#D8524A',
 } as const;
 
-const ITEM_COLORS: Record<ItemKind, string> = { wood: '#9A6B43', stone: '#9A9AA0', berries: '#D8524A', rice: '#E8D9A0' };
+const ITEM_COLORS: Record<ItemKind, string> = { wood: '#9A6B43', stone: '#9A9AA0', berries: '#D8524A', rice: '#E8D9A0', meal: '#E0A458' };
 export interface View {
   selectedId: number | null;
   /** Область, которую сейчас рисует игрок. */
   preview: { color: string; cells: readonly Point[] } | null;
+  /** Подсвечивать замкнутые комнаты. */
+  showRooms: boolean;
 }
 
 /** Рисует постройку в квадрате со стороной s (используется и для текстуры, и для «призраков» чертежей). */
@@ -184,6 +186,7 @@ export class Renderer {
     ctx.strokeRect(origin.x, origin.y, mapPxW, mapPxH);
 
     this.drawOverlays(world, cam, view);
+    this.drawBedOwners(world, cam);
     this.drawBushes(world, cam);
     this.drawItems(world, cam);
     this.drawPawns(world, cam, alpha, view);
@@ -204,6 +207,15 @@ export class Renderer {
   /** Склад, огород, приказы, чертежи и посевы. */
   private drawOverlays(world: World, cam: Camera, _view: View): void {
     const ctx = this.ctx;
+    if (_view.showRooms) {
+      ctx.fillStyle = 'rgba(90,169,230,0.13)';
+      for (const room of world.rooms().rooms) {
+        for (const idx of room.cells) {
+          const r = this.cellRect(cam, idx);
+          if (this.visible(r)) ctx.fillRect(r.x, r.y, r.s, r.s);
+        }
+      }
+    }
     ctx.fillStyle = 'rgba(143,191,90,0.16)';
     for (const idx of world.zone) {
       const r = this.cellRect(cam, idx);
@@ -266,6 +278,23 @@ export class Renderer {
     }
   }
 
+  /** Метка владельца на закреплённой кровати. */
+  private drawBedOwners(world: World, cam: Camera): void {
+    const ctx = this.ctx;
+    for (const p of world.pawns) {
+      if (p.ownedBed === null) continue;
+      const r = this.cellRect(cam, p.ownedBed);
+      if (!this.visible(r)) continue;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(r.x + r.s * 0.22, r.y + r.s * 0.22, Math.max(2.5, r.s * 0.11), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
   private drawBushes(world: World, cam: Camera): void {
     const ctx = this.ctx;
     for (const [idx, b] of world.map.bushes) {
@@ -295,7 +324,7 @@ export class Renderer {
       if (!this.visible(r)) continue;
       const pad = r.s * 0.24;
       ctx.fillStyle = ITEM_COLORS[s.kind];
-      if (s.kind === 'berries') {
+      if (s.kind === 'berries' || s.kind === 'meal') {
         ctx.beginPath();
         ctx.arc(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.24, 0, Math.PI * 2);
         ctx.fill();

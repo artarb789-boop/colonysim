@@ -108,4 +108,42 @@ export const BUILD_WAIT_LIMIT = 400;
 export const CROP = { growTicks: DAY_TICKS * 2, yield: 6, sowTicks: 60, reapTicks: 80 } as const;
 
 /** Сколько еды (0–100) даёт одна единица продукта. */
-export const FOOD_VALUE = { berries: 10, rice: 10 } as const;
+export const FOOD_VALUE = { berries: 10, rice: 10, meal: 40 } as const;
+
+// ---------- Этап 3b: комнаты, готовка, настроение ----------
+
+/** Готовка на плите: из raw единиц сырой еды получается meals обедов. */
+export const COOK = { raw: 3, meals: 2, ticks: 160, mealTarget: 10 } as const;
+/** Во сколько раз быстрее восстанавливается сон в кровати. */
+export const BED_SLEEP_FACTOR = 1.25;
+/** Замкнутая область больше этого числа клеток — не комната (считается улицей). */
+export const ROOM_MAX_CELLS = 150;
+
+/** Настроение 0–100: база плюс сумма мыслей; ниже порога — срыв. */
+export const MOOD = {
+  base: 50,
+  breakBelow: 20,
+  /** Длительность срыва, тики (≈ 1–2 игровых часа). */
+  breakMinTicks: DAY_TICKS / 24,
+  breakMaxTicks: DAY_TICKS / 12,
+  /** После срыва сутки без нового срыва. */
+  breakCooldown: DAY_TICKS,
+  wanderRadius: 5,
+  wanderPauseMin: 40,
+  wanderPauseMax: 100,
+  /** Как часто пересчитывать настроение (тики). */
+  updateEvery: 20,
+} as const;
+
+/** Мысли-события: значение и сколько тиков держатся. */
+export const THOUGHTS = {
+  ateMeal: { value: 10, ticks: DAY_TICKS },
+  ateRaw: { value: -3, ticks: DAY_TICKS },
+  sleptOnFloor: { value: -5, ticks: DAY_TICKS },
+  sleptInBed: { value: 3, ticks: DAY_TICKS },
+  ownBedroom: { value: 5, ticks: DAY_TICKS },
+  catharsis: { value: 15, ticks: DAY_TICKS / 4 },
+} as const;
+
+/** Мысли-состояния: действуют, пока выполняется условие по нужде. */
+export const STATE_MOODS = { hungry: -8, starving: -20, tired: -8, exhausted: -5 } as const;

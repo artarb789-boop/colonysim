@@ -1,13 +1,13 @@
 import { DROP_SEARCH_RADIUS, STACK_MAX } from './balance';
 import type { GameMap } from './map';
 
-export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice';
-export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice'];
+export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice' | 'meal';
+export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice', 'meal'];
 
-/** Продукты, которые можно съесть сырыми. */
-export type FoodKind = 'berries' | 'rice';
+/** Продукты: berries и rice — сырые, meal — готовый обед. */
+export type FoodKind = 'berries' | 'rice' | 'meal';
 export function isFood(kind: ItemKind): kind is FoodKind {
-  return kind === 'berries' || kind === 'rice';
+  return kind === 'berries' || kind === 'rice' || kind === 'meal';
 }
 
 export interface ItemStack {

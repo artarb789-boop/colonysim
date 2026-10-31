@@ -29,6 +29,8 @@ export interface SaveData {
   garden: number[];
   blueprints: [number, Blueprint][];
   reservations: [number, number][];
+  /** Состояние ГПСЧ симуляции (может отсутствовать в старых сохранениях). */
+  rng?: number;
   pawns: Pawn[];
 }
 
@@ -50,6 +52,7 @@ export function serializeWorld(w: World): SaveData {
       garden: [...w.garden],
       blueprints: [...w.blueprints],
       reservations: w.exportReservations(),
+      rng: w.rng.getState(),
       pawns: w.pawns,
     }),
   ) as SaveData;
@@ -132,8 +135,15 @@ export function restoreWorld(data: unknown): World | null {
   w.importReservations(d.reservations);
   for (const p of d.pawns) {
     for (const work of WORK_TYPES) p.priorities[work] ??= DEFAULT_PRIORITY;
+    // поля, появившиеся позже формата 2
+    p.thoughts ??= [];
+    p.mood ??= 50;
+    p.breakUntil ??= null;
+    p.breakCooldownUntil ??= 0;
+    p.ownedBed ??= null;
     w.pawns.push(p);
   }
+  if (typeof d.rng === 'number') w.rng.setState(d.rng);
   w.tickCount = d.tick;
   return w;
 }

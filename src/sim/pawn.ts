@@ -7,6 +7,7 @@ import {
   TICKS_PER_SECOND,
 } from './balance';
 import type { Job, WorkType } from './jobs';
+import type { Thought } from './mood';
 import { WORK_TYPES } from './jobs';
 import type { ItemStack } from './items';
 import type { GameMap } from './map';
@@ -57,6 +58,16 @@ export interface Pawn {
   job: Job | null;
   carrying: ItemStack | null;
   thinkCooldown: number;
+  /** Мысли-события; настроение складывается из них и состояний нужд. */
+  thoughts: Thought[];
+  /** Настроение 0–100 (кэш для интерфейса). */
+  mood: number;
+  /** Идёт срыв до этого тика, иначе null. */
+  breakUntil: number | null;
+  /** Новый срыв возможен не раньше этого тика. */
+  breakCooldownUntil: number;
+  /** Клетка закреплённой кровати. */
+  ownedBed: number | null;
 }
 
 export function createPawn(id: number, name: string, color: string, x: number, y: number, rng: Rng): Pawn {
@@ -83,6 +94,11 @@ export function createPawn(id: number, name: string, color: string, x: number, y
     job: null,
     carrying: null,
     thinkCooldown: 0,
+    thoughts: [],
+    mood: 50,
+    breakUntil: null,
+    breakCooldownUntil: 0,
+    ownedBed: null,
   };
 }
 

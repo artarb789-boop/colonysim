@@ -2,7 +2,9 @@ import { isBuildTool, type Tool } from '../input/tools';
 import { BUILD, NEEDS } from '../sim/balance';
 import { IMPLEMENTED_WORKS, type WorkType } from '../sim/jobs';
 import type { World } from '../sim/world';
-import { ITEM_LABELS, NEED_LABELS, WORK_HINTS, WORK_LABELS, jobLabel, jobProgress } from './labels';
+import { moodEntries } from '../sim/mood';
+import { SKILLS, type SkillId } from '../sim/pawn';
+import { ITEM_LABELS, NEED_LABELS, SKILL_LABELS, THOUGHT_LABELS, WORK_HINTS, WORK_LABELS, jobLabel, jobProgress, moodClass } from './labels';
 
 export interface HudCallbacks {
   onSelectPawn(id: number | null): void;
@@ -16,7 +18,12 @@ export interface HudCallbacks {
 export interface MenuItem {
   label: string;
   action: () => void;
+  /** Только информация, нажать нельзя. */
+  info?: boolean;
 }
+
+type Tab = 'needs' | 'skills' | 'health';
+const TAB_LABELS: Record<Tab, string> = { needs: 'Нужды', skills: 'Навыки', health: 'Здоровье' };
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -90,12 +97,18 @@ export class Hud {
   private readonly resEls = new Map<string, HTMLSpanElement>();
   private readonly warnings = el('div', 'warnings');
   private readonly card = el('div', 'pawncard');
+  private tab: Tab = 'needs';
   private readonly cardEls = {
     avatar: el('div', 'pawncard__avatar'),
     name: el('div', 'pawncard__name'),
     task: el('div', 'pawncard__task'),
+    mood: el('div', 'pawncard__mood mono'),
     progress: el('div', 'bar bar--progress'),
+    tabs: new Map<Tab, HTMLButtonElement>(),
+    panels: new Map<Tab, HTMLElement>(),
     bars: new Map<string, { fill: HTMLDivElement; value: HTMLSpanElement }>(),
+    skills: new Map<SkillId, { fill: HTMLDivElement; value: HTMLSpanElement }>(),
+    thoughts: el('div', 'thoughts'),
   };
   private readonly modal = el('div', 'modal');
   private readonly modalTitle = el('div', 'modal__title');
@@ -191,7 +204,7 @@ export class Hud {
   }
 
   private buildResources(root: HTMLElement): void {
-    for (const kind of ['wood', 'stone', 'berries', 'rice'] as const) {
+    for (const kind of ['wood', 'stone', 'berries', 'rice', 'meal'] as const) {
       const item = el('div', 'resources__item');
       item.append(el('span', `resources__dot resources__dot--${kind}`), el('span', 'resources__label', ITEM_LABELS[kind]));
       const v = el('span', 'resources__value mono', '0');
@@ -207,13 +220,28 @@ export class Hud {
     const head = el('div', 'pawncard__head');
     const titles = el('div', 'pawncard__titles');
     titles.append(c.name, c.task);
-    head.append(c.avatar, titles);
+    const moodBox = el('div', 'pawncard__moodbox');
+    moodBox.append(el('div', 'pawncard__moodlabel', 'Настроение'), c.mood);
+    head.append(c.avatar, titles, moodBox);
     this.card.append(head);
 
     const fill = el('div', 'bar__fill');
     c.progress.append(fill);
     this.card.append(c.progress);
 
+    const tabs = el('div', 'tabs');
+    for (const t of ['needs', 'skills', 'health'] as const) {
+      const b = el('button', 'tabs__btn', TAB_LABELS[t]);
+      b.type = 'button';
+      b.addEventListener('click', () => this.setTab(t));
+      tabs.append(b);
+      c.tabs.set(t, b);
+    }
+    this.card.append(tabs);
+
+    const body = el('div', 'pawncard__body');
+    // нужды и мысли
+    const needs = el('div', 'tabpanel');
     for (const key of ['food', 'sleep', 'rest'] as const) {
       const row = el('div', 'need');
       row.append(el('span', 'need__label', NEED_LABELS[key]));
@@ -223,9 +251,32 @@ export class Hud {
       row.append(bar);
       const value = el('span', 'need__value mono');
       row.append(value);
-      this.card.append(row);
+      needs.append(row);
       c.bars.set(key, { fill: f, value });
     }
+    needs.append(el('div', 'tabpanel__title', 'Мысли'), c.thoughts);
+    c.panels.set('needs', needs);
+    // навыки
+    const skills = el('div', 'tabpanel');
+    for (const id of SKILLS) {
+      const row = el('div', 'need');
+      row.append(el('span', 'need__label need__label--wide', SKILL_LABELS[id]));
+      const bar = el('div', 'bar');
+      const f = el('div', 'bar__fill');
+      bar.append(f);
+      row.append(bar);
+      const value = el('span', 'need__value mono');
+      row.append(value);
+      skills.append(row);
+      c.skills.set(id, { fill: f, value });
+    }
+    c.panels.set('skills', skills);
+    // здоровье
+    const health = el('div', 'tabpanel');
+    health.append(el('div', 'tabpanel__title', 'Здоров'), el('div', 'modal__note', 'Ранения и болезни появятся в следующих этапах.'));
+    c.panels.set('health', health);
+    for (const panel of c.panels.values()) body.append(panel);
+    this.card.append(body);
 
     const actions = el('div', 'pawncard__actions');
     const works = el('button', 'btn', 'Работы');
@@ -237,6 +288,13 @@ export class Hud {
     actions.append(center, works);
     this.card.append(actions);
     root.append(this.card);
+    this.setTab('needs');
+  }
+
+  private setTab(tab: Tab): void {
+    this.tab = tab;
+    for (const [t, b] of this.cardEls.tabs) b.classList.toggle('active', t === tab);
+    for (const [t, p] of this.cardEls.panels) p.hidden = t !== tab;
   }
 
   private buildModal(root: HTMLElement): void {
@@ -284,7 +342,8 @@ export class Hud {
         info.append(el('span', 'colonyrow__name', p.name), el('span', 'colonyrow__task', jobLabel(p)));
         const n = p.needs;
         const nums = el('span', 'colonyrow__needs mono', `${Math.round(n.food)} · ${Math.round(n.sleep)} · ${Math.round(n.rest)}`);
-        row.append(av, info, nums);
+        const mood = el('span', `colonyrow__mood mono mood--${moodClass(p.mood)}`, `${Math.round(p.mood)}%`);
+        row.append(av, info, nums, mood);
         row.addEventListener('click', () => {
           this.closeModal();
           this.cb.onSelectPawn(p.id);
@@ -292,7 +351,7 @@ export class Hud {
         });
         body.append(row);
       }
-      body.append(el('div', 'modal__note', 'Числа: еда · сон · отдых'));
+      body.append(el('div', 'modal__note', 'Числа: еда · сон · отдых, затем настроение'));
     });
   }
 
@@ -411,8 +470,9 @@ export class Hud {
     if (items.length === 0) return;
     this.menu.replaceChildren();
     for (const it of items) {
-      const b = el('button', 'ctxmenu__item', it.label);
+      const b = el('button', it.info ? 'ctxmenu__item ctxmenu__item--info' : 'ctxmenu__item', it.label);
       b.type = 'button';
+      b.disabled = !!it.info;
       b.addEventListener('click', () => {
         this.hideMenu();
         it.action();
@@ -456,6 +516,7 @@ export class Hud {
     setText(this.resEls.get('stone')!, String(stock.stone));
     setText(this.resEls.get('berries')!, String(stock.berries));
     setText(this.resEls.get('rice')!, String(stock.rice));
+    setText(this.resEls.get('meal')!, String(stock.meal));
 
     this.updateWarnings();
 
@@ -466,18 +527,56 @@ export class Hud {
       c.avatar.textContent = p.name.charAt(0);
       c.avatar.style.setProperty('--pawn', p.color);
       setText(c.task, jobLabel(p));
+      setText(c.mood, `${Math.round(p.mood)}%`);
+      c.mood.className = `pawncard__mood mono mood--${moodClass(p.mood)}`;
       const prog = jobProgress(this.world, p);
       c.progress.hidden = prog === null;
       if (prog !== null) (c.progress.firstElementChild as HTMLElement).style.width = `${Math.round(prog * 100)}%`;
-      for (const key of ['food', 'sleep', 'rest'] as const) {
-        const v = p.needs[key];
-        const b = c.bars.get(key)!;
-        b.fill.style.width = `${Math.round(v)}%`;
-        b.fill.className = `bar__fill ${v < 25 ? 'bad' : v < 50 ? 'warn' : 'good'}`;
-        setText(b.value, String(Math.round(v)));
+      if (this.tab === 'needs') {
+        for (const key of ['food', 'sleep', 'rest'] as const) {
+          const v = p.needs[key];
+          const b = c.bars.get(key)!;
+          b.fill.style.width = `${Math.round(v)}%`;
+          b.fill.className = `bar__fill ${v < 25 ? 'bad' : v < 50 ? 'warn' : 'good'}`;
+          setText(b.value, String(Math.round(v)));
+        }
+        this.updateThoughts(p);
+      } else if (this.tab === 'skills') {
+        for (const [id, b] of c.skills) {
+          const v = p.skills[id];
+          b.fill.style.width = `${Math.round((v / 20) * 100)}%`;
+          setText(b.value, String(v));
+        }
       }
     }
     if (!this.modal.hidden && this.modalTitle.textContent === 'Колония') this.modalRender?.();
+  }
+
+  /** Три главные мысли по модулю значения. */
+  private updateThoughts(p: (typeof this.world.pawns)[number]): void {
+    const top = moodEntries(p, this.world.tickCount)
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+      .slice(0, 3);
+    const key = top.map((e) => `${e.key}:${e.value}`).join('|');
+    const box = this.cardEls.thoughts;
+    if (box.dataset.key === key) return;
+    box.dataset.key = key;
+    if (top.length === 0) {
+      box.replaceChildren(el('div', 'thought thought--none', 'Ничего особенного'));
+      return;
+    }
+    box.replaceChildren(
+      ...top.map((e) => {
+        const row = el('div', `thought thought--${e.value >= 0 ? 'good' : 'bad'}`);
+        row.append(el('span', '', THOUGHT_LABELS[e.key]), el('span', 'mono', `${e.value > 0 ? '+' : ''}${e.value}`));
+        return row;
+      }),
+    );
+  }
+
+  /** Открыта ли панель «Строить» (на карте подсвечиваются комнаты). */
+  get buildOpen(): boolean {
+    return this.bar === 'build';
   }
 
   private updateWarnings(): void {
@@ -486,6 +585,8 @@ export class Hud {
       if (p.needs.food <= 0) chips.push({ text: `${p.name} голодает`, level: 'bad' });
       else if (p.needs.food < NEEDS.foodUrgent) chips.push({ text: `${p.name} голоден`, level: 'warn' });
       if (p.needs.sleep <= NEEDS.sleepCritical) chips.push({ text: `${p.name} валится с ног`, level: 'bad' });
+      if (p.breakUntil !== null) chips.push({ text: `${p.name} в срыве`, level: 'bad' });
+      else if (p.mood < 30) chips.push({ text: `${p.name} на грани срыва`, level: 'warn' });
     }
     if (this.world.needsZone) chips.push({ text: 'Нет склад-зоны', level: 'warn' });
     const key = chips.map((c) => c.level + c.text).join('|');

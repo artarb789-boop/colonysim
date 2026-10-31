@@ -10,7 +10,7 @@
   --warn: #f0a35e;
   --bad: #f08a7e;
   --top: 48px;
-  --side: 72px;
+  --side: 65px;
   --sat: env(safe-area-inset-top);
   --sar: env(safe-area-inset-right);
   --sab: env(safe-area-inset-bottom);
@@ -131,13 +131,13 @@ button {
 
 .sidebar__btn {
   flex: 0 0 auto;
-  min-height: 56px;
+  min-height: 50px;
   padding: 0 2px;
   border: 1px solid var(--divider);
   border-radius: 8px;
   background: var(--bg);
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .sidebar__btn.active {
@@ -167,10 +167,11 @@ button {
   flex: 0 0 auto;
   min-width: 44px;
   min-height: 44px;
-  padding: 0 12px;
+  padding: 0 11px;
   border: 1px solid var(--divider);
   border-radius: 8px;
   background: var(--bg);
+  font-size: 14px;
 }
 
 .orders__btn.active {
@@ -199,7 +200,9 @@ button {
   left: calc(var(--side) + var(--sal) + 8px);
   bottom: calc(8px + var(--sab));
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: calc(100vw - var(--side) - var(--sal) - 24px);
   padding: 8px 10px;
   background: rgba(31, 36, 40, 0.92);
   border: 1px solid var(--divider);
@@ -237,6 +240,10 @@ body.orders-open .orders__hint {
 }
 .resources__dot--stone {
   background: #9a9aa0;
+}
+.resources__dot--meal {
+  background: #e0a458;
+  border-radius: 50%;
 }
 .resources__dot--rice {
   background: #e8d9a0;
@@ -287,7 +294,10 @@ body.has-card .warnings {
   right: calc(8px + var(--sar));
   width: 300px;
   box-sizing: border-box;
-  padding: 12px;
+  max-height: calc(100vh - var(--top) - var(--sat) - 16px);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
   background: var(--panel);
   border: 1px solid var(--divider);
   border-radius: 12px;
@@ -298,7 +308,77 @@ body.has-card .warnings {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+}
+.pawncard__titles {
+  flex: 1;
+  min-width: 0;
+}
+.pawncard__moodbox {
+  text-align: right;
+}
+.pawncard__moodlabel {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.pawncard__mood {
+  font-size: 18px;
+  font-weight: 600;
+}
+.mood--good {
+  color: var(--good);
+}
+.mood--warn {
+  color: var(--warn);
+}
+.mood--bad {
+  color: var(--bad);
+}
+.pawncard__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  touch-action: pan-y;
+  margin: 6px 0;
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+.tabs__btn {
+  flex: 1;
+  min-height: 44px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.tabs__btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tabpanel__title {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.thought {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 13px;
+}
+.thought--good .mono {
+  color: var(--good);
+}
+.thought--bad .mono {
+  color: var(--bad);
+}
+.thought--none {
+  color: var(--text-dim);
+}
+.need__label--wide {
+  white-space: nowrap;
 }
 
 .pawncard__avatar,
@@ -348,7 +428,7 @@ body.has-card .warnings {
   background: var(--bad);
 }
 .bar--progress {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .bar--progress .bar__fill {
   background: var(--blueprint);
@@ -356,10 +436,10 @@ body.has-card .warnings {
 
 .need {
   display: grid;
-  grid-template-columns: 56px 1fr 30px;
+  grid-template-columns: 96px 1fr 30px;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 7px;
   font-size: 13px;
 }
 .need__label {
@@ -525,6 +605,11 @@ body.has-card .warnings {
   font-size: 12px;
   color: var(--text-dim);
 }
+.colonyrow__mood {
+  min-width: 44px;
+  text-align: right;
+  font-weight: 600;
+}
 .colonyrow__needs {
   font-size: 12px;
   color: var(--text-dim);
@@ -551,6 +636,10 @@ body.has-card .warnings {
   background: transparent;
   text-align: left;
 }
+.ctxmenu__item--info {
+  color: var(--text-dim);
+  font-size: 13px;
+}
 .ctxmenu__item:last-child {
   border-bottom: 0;
 }
@@ -575,7 +664,7 @@ body.has-card .warnings {
 @media (orientation: portrait) {
   :root {
     --top: 96px;
-    --bottom: 56px;
+    --bottom: 52px;
   }
 
   .topbar {
@@ -613,7 +702,7 @@ body.has-card .warnings {
     bottom: 0;
     width: auto;
     height: calc(var(--bottom) + var(--sab));
-    padding: 6px max(6px, var(--sar)) calc(6px + var(--sab)) max(6px, var(--sal));
+    padding: 4px max(6px, var(--sar)) calc(4px + var(--sab)) max(6px, var(--sal));
     flex-direction: row;
     border-right: 0;
     border-top: 1px solid var(--divider);
@@ -621,7 +710,7 @@ body.has-card .warnings {
   .sidebar__btn {
     flex: 1;
     min-height: 44px;
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .resources {
@@ -646,6 +735,7 @@ body.has-card .warnings {
     left: calc(8px + var(--sal));
     right: calc(8px + var(--sar));
     width: auto;
+    max-height: 52vh;
     bottom: calc(var(--bottom) + var(--sab) + 8px);
   }
 

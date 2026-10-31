@@ -1,7 +1,8 @@
 import type { World } from '../sim/world';
 import type { JobKind, WorkType } from '../sim/jobs';
 import type { ItemKind } from '../sim/items';
-import type { Pawn } from '../sim/pawn';
+import type { MoodKey } from '../sim/mood';
+import type { Pawn, SkillId } from '../sim/pawn';
 
 export const WORK_LABELS: Record<WorkType, string> = {
   firefighting: 'Тушение',
@@ -19,12 +20,13 @@ export const WORK_LABELS: Record<WorkType, string> = {
 
 export const WORK_HINTS: Partial<Record<WorkType, string>> = {
   construction: 'стройка, подвоз, разборка',
+  cooking: 'обеды на плите',
   plants: 'рубка, ягоды, огород',
   mining: 'добыча камня',
   hauling: 'на склад-зону',
 };
 
-export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис' };
+export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис', meal: 'Обеды' };
 
 const JOB_LABELS: Record<JobKind, string> = {
   chop: 'Рубит дерево',
@@ -36,6 +38,8 @@ const JOB_LABELS: Record<JobKind, string> = {
   deliver: 'Несёт материалы',
   build: 'Строит',
   deconstruct: 'Разбирает',
+  cook: 'Готовит обед',
+  wander: 'Срыв: бродит',
   eat: 'Ест',
   sleep: 'Спит',
   relax: 'Отдыхает',
@@ -48,6 +52,8 @@ export function jobLabel(p: Pawn): string {
   if (j.kind === 'eat' && j.phase === 'move') return 'Идёт поесть';
   if (j.kind === 'haul' && j.phase === 'move') return 'Идёт за грузом';
   if (j.kind === 'deliver' && j.phase === 'move') return 'Идёт за материалами';
+  if (j.kind === 'cook' && j.phase === 'move') return 'Идёт за продуктами';
+  if (j.kind === 'sleep' && j.phase === 'move') return 'Идёт спать';
   if ((j.kind === 'sleep' || j.kind === 'relax') && j.phase === 'move') return 'Устал, ищет место';
   return JOB_LABELS[j.kind];
 }
@@ -60,3 +66,33 @@ export function jobProgress(_world: World, p: Pawn): number | null {
 }
 
 export const NEED_LABELS = { food: 'Еда', sleep: 'Сон', rest: 'Отдых' } as const;
+
+export const THOUGHT_LABELS: Record<MoodKey, string> = {
+  ateMeal: 'Вкусный ужин',
+  ateRaw: 'Ел сырое',
+  sleptOnFloor: 'Спал на полу',
+  sleptInBed: 'Спал в кровати',
+  ownBedroom: 'Своя спальня',
+  catharsis: 'Выпустил пар',
+  hungry: 'Голод',
+  starving: 'Страшный голод',
+  tired: 'Хочет спать',
+  exhausted: 'Нужен отдых',
+};
+
+export const SKILL_LABELS: Record<SkillId, string> = {
+  construction: 'Строительство',
+  crafting: 'Ремесло',
+  mining: 'Добыча',
+  cooking: 'Готовка',
+  plants: 'Растения',
+  shooting: 'Стрельба',
+  medicine: 'Медицина',
+  social: 'Общение',
+  intellect: 'Интеллект',
+};
+
+/** Класс цвета для настроения в процентах. */
+export function moodClass(mood: number): 'good' | 'warn' | 'bad' {
+  return mood < 25 ? 'bad' : mood < 45 ? 'warn' : 'good';
+}

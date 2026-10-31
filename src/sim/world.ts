@@ -1,4 +1,5 @@
 import {
+  BED_SLEEP_FACTOR,
   BUILD,
   BUSH_MAX_BERRIES,
   BUSH_REGROW_TICKS,
@@ -6,6 +7,7 @@ import {
   DAY_START_HOUR,
   DAY_TICKS,
   MAP_SIZE,
+  MOOD,
   NEEDS,
   PAWN_COUNT,
   START_BERRIES,
@@ -26,6 +28,7 @@ import {
   planGoto,
   planStepOff,
   planUrgent,
+  planWander,
   planWork,
   runJob,
   startJob,
@@ -33,9 +36,11 @@ import {
   type WorkType,
 } from './jobs';
 import { GameMap, Structure, Terrain, generateMap } from './map';
+import { addThought, computeMood, pruneThoughts } from './mood';
 import { createPawn, type Pawn } from './pawn';
 import type { Point } from './pathfinding';
 import { Rng } from './rng';
+import { computeRooms, type RoomMap } from './rooms';
 
 export type Designation = 'chop' | 'mine' | 'deconstruct';
 export type Order = 'chop' | 'mine' | 'zone' | 'garden' | 'deconstruct' | 'erase';
@@ -74,7 +79,10 @@ export class World {
   /** Клетки, у которых изменился вид (местность, постройки), — рендер перерисует их. */
   readonly dirty: number[] = [];
   tickCount = 0;
+  /** Случайность симуляции (блуждание при срыве); состояние входит в сохранение. */
+  readonly rng: Rng;
   private readonly ai: boolean;
+  private roomCache: RoomMap | null = null;
   private readonly reservations = new Map<number, number>();
 
   constructor(
@@ -82,6 +90,7 @@ export class World {
     opts: WorldOptions = {},
   ) {
     this.ai = opts.ai ?? true;
+    this.rng = new Rng(seed ^ 0x77aa);
     this.map = generateMap(seed);
     this.items = new ItemStore(this.map);
     const rng = new Rng(seed ^ 0xa11ce);
@@ -274,6 +283,7 @@ export class World {
         this.items.drop(stack.kind, stack.count, x, y);
       }
     }
+    this.invalidateRooms();
     this.markDirty(idx);
   }
 
@@ -295,10 +305,36 @@ export class World {
         this.items.drop(BUILD[kind].item, n, x, y);
       }
     }
+    this.invalidateRooms();
     this.markDirty(idx);
   }
 
-  // ---------- запросы ----------
+  // ---------- комнаты и запросы ----------
+
+  /** Комнаты: пересчитываются лениво после любых изменений стен и дверей. */
+  rooms(): RoomMap {
+    this.roomCache ??= computeRooms(this.map);
+    return this.roomCache;
+  }
+
+  invalidateRooms(): void {
+    this.roomCache = null;
+  }
+
+  /** Индексы клеток с постройкой данного вида (Structure.*). */
+  cellsWith(structure: number): number[] {
+    const out: number[] = [];
+    const arr = this.map.structure;
+    for (let i = 0; i < arr.length; i++) if (arr[i] === structure) out.push(i);
+    return out;
+  }
+
+  /** Готовых обедов на карте: на земле, на складе и в руках. */
+  mealCount(): number {
+    let n = this.items.total('meal');
+    for (const p of this.pawns) if (p.carrying?.kind === 'meal') n += p.carrying.count;
+    return n;
+  }
 
   /** Ягод на карте: на земле, на складе и в руках. */
   totalBerries(): number {
@@ -315,6 +351,7 @@ export class World {
       stone: this.items.total('stone', inZone),
       berries: this.items.total('berries', inZone),
       rice: this.items.total('rice', inZone),
+      meal: this.items.total('meal', inZone),
     };
   }
 
@@ -338,6 +375,7 @@ export class World {
       p.prevX = p.x;
       p.prevY = p.y;
       this.updateNeeds(p);
+      if ((this.tickCount + p.id) % MOOD.updateEvery === 0) this.updateMood(p);
       if (this.ai) this.think(p);
       runJob(this, p);
     }
@@ -352,15 +390,40 @@ export class World {
     const working = job !== null && WORK_JOB_KINDS.has(job.kind);
 
     n.food = Math.max(0, n.food - perTick(NEEDS.foodPerDay));
+    const onBed = sleeping && this.map.structure[p.cy * this.map.width + p.cx] === Structure.Bed;
     n.sleep = sleeping
-      ? Math.min(100, n.sleep + perTick(NEEDS.sleepRestorePerDay))
+      ? Math.min(100, n.sleep + perTick(NEEDS.sleepRestorePerDay) * (onBed ? BED_SLEEP_FACTOR : 1))
       : Math.max(0, n.sleep - perTick(NEEDS.sleepPerDay));
     if (relaxing) n.rest = Math.min(100, n.rest + perTick(NEEDS.relaxRestorePerDay));
     else if (working) n.rest = Math.max(0, n.rest - perTick(NEEDS.restWorkPerDay));
     else n.rest = Math.min(100, n.rest + perTick(NEEDS.restIdlePerDay));
   }
 
+  /** Пересчёт настроения; ниже порога начинается срыв. */
+  private updateMood(p: Pawn): void {
+    pruneThoughts(p, this.tickCount);
+    p.mood = computeMood(p, this.tickCount);
+    if (p.breakUntil === null && p.mood < MOOD.breakBelow && this.tickCount >= p.breakCooldownUntil) {
+      cancelJob(this, p);
+      p.breakUntil = this.tickCount + this.rng.int(MOOD.breakMinTicks, MOOD.breakMaxTicks);
+    }
+  }
+
+  private endBreak(p: Pawn): void {
+    cancelJob(this, p);
+    p.breakUntil = null;
+    p.breakCooldownUntil = this.tickCount + MOOD.breakCooldown;
+    addThought(p, 'catharsis', this.tickCount);
+  }
+
   private think(p: Pawn): void {
+    if (p.breakUntil !== null) {
+      if (this.tickCount >= p.breakUntil) this.endBreak(p);
+      else {
+        if (p.job === null) startJob(this, p, planWander(this, p));
+        return;
+      }
+    }
     if (p.job === null) {
       if (p.thinkCooldown > 0) {
         p.thinkCooldown--;
