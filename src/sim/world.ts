@@ -6,7 +6,6 @@ import {
   BUSH_REGROW_TICKS,
   COLD_WAVE,
   COMBAT,
-  CROP,
   GROW,
   HEALTH,
   DAY_TICKS,
@@ -22,6 +21,7 @@ import {
 import {
   STRUCTURE_OF,
   blocksMovement,
+  kindOfStructure,
   type Blueprint,
   type BuildKind,
 } from './build';
@@ -45,6 +45,7 @@ import {
 } from './jobs';
 import { GameMap, Structure, Terrain, generateMap } from './map';
 import { calendar, gameTime, growthFactor, indoorTemp, outdoorTemp, type GameTime } from './climate';
+import { growTicksOf, isMature } from './crops';
 import { initStory, tickStory, type LogEntry, type Story } from './events';
 import { tickEnemies, type Fx } from './raid';
 import { addWound, consciousness, isFatal, stepHealth, type BodyPart, type WoundKind } from './health';
@@ -56,7 +57,7 @@ import { computeRooms, type RoomMap } from './rooms';
 import { effectsOf, exposureOf } from './traits';
 
 export type Designation = 'chop' | 'mine' | 'deconstruct';
-export type Order = 'chop' | 'mine' | 'zone' | 'garden' | 'deconstruct' | 'erase';
+export type Order = 'chop' | 'mine' | 'zone' | 'garden' | 'herbs' | 'deconstruct' | 'erase';
 
 export interface WorldOptions {
   pawnCount?: number;
@@ -91,8 +92,10 @@ export class World {
   readonly designations = new Map<number, Designation>();
   /** Клетки склад-зоны. */
   readonly zone = new Set<number>();
-  /** Клетки огорода. */
+  /** Клетки огорода (рис). */
   readonly garden = new Set<number>();
+  /** Клетки грядки целебных трав. */
+  readonly herbs = new Set<number>();
   /** Чертежи будущих построек по индексу клетки. */
   readonly blueprints = new Map<number, Blueprint>();
   /** Клетки, у которых изменился вид (местность, постройки), — рендер перерисует их. */
@@ -251,6 +254,7 @@ export class World {
           case 'zone':
             if (buildable && !this.map.bushes.has(idx) && !this.zone.has(idx)) {
               this.garden.delete(idx);
+              this.herbs.delete(idx);
               this.zone.add(idx);
               changed++;
             }
@@ -258,7 +262,16 @@ export class World {
           case 'garden':
             if (buildable && !this.map.bushes.has(idx) && !this.garden.has(idx) && this.map.structure[idx] === Structure.None) {
               this.zone.delete(idx);
+              this.herbs.delete(idx);
               this.garden.add(idx);
+              changed++;
+            }
+            break;
+          case 'herbs':
+            if (buildable && !this.map.bushes.has(idx) && !this.herbs.has(idx) && this.map.structure[idx] === Structure.None) {
+              this.zone.delete(idx);
+              this.garden.delete(idx);
+              this.herbs.add(idx);
               changed++;
             }
             break;
@@ -267,6 +280,7 @@ export class World {
             if (this.designations.delete(idx)) did = true;
             if (this.zone.delete(idx)) did = true;
             if (this.garden.delete(idx)) did = true;
+            if (this.herbs.delete(idx)) did = true;
             if (this.cancelBlueprint(idx)) did = true;
             if (did) changed++;
             break;
@@ -323,6 +337,7 @@ export class World {
     if (blocksMovement(bp.kind)) {
       this.zone.delete(idx);
       this.garden.delete(idx);
+      this.herbs.delete(idx);
       this.map.crops.delete(idx);
       const stack = this.items.stacks.get(idx);
       if (stack) {
@@ -341,7 +356,7 @@ export class World {
     let kind: BuildKind | null = null;
     if (id !== Structure.None) {
       this.map.structure[idx] = Structure.None;
-      kind = id === Structure.Wall ? 'wall' : id === Structure.Door ? 'door' : id === Structure.Bed ? 'bed' : 'stove';
+      kind = kindOfStructure(id);
     } else if (this.map.floor[idx]) {
       this.map.floor[idx] = 0;
       kind = 'floor';
@@ -455,6 +470,8 @@ export class World {
       silver: this.items.total('silver', inZone),
       club: this.items.total('club', inZone),
       bow: this.items.total('bow', inZone),
+      herb: this.items.total('herb', inZone),
+      medkit: this.items.total('medkit', inZone),
     };
   }
 
@@ -487,7 +504,7 @@ export class World {
       }
     }
     const grow = growthFactor(temp);
-    if (grow > 0) for (const c of this.map.crops.values()) if (c.growth < CROP.growTicks) c.growth = Math.min(CROP.growTicks, c.growth + grow);
+    if (grow > 0) for (const c of this.map.crops.values()) if (!isMature(c)) c.growth = Math.min(growTicksOf(c), c.growth + grow);
     if (temp < GROW.frostKills && this.tickCount % 100 === 0) this.frostKill();
     tickStory(this);
     for (const p of this.pawns) {
@@ -612,7 +629,7 @@ export class World {
   private frostKill(): void {
     let dead = 0;
     for (const [idx, c] of this.map.crops) {
-      if (c.growth < CROP.growTicks) {
+      if (!isMature(c)) {
         this.map.crops.delete(idx);
         dead++;
       }

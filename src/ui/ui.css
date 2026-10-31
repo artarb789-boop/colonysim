@@ -59,6 +59,7 @@ button {
 }
 
 .topbar__time {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -82,14 +83,19 @@ button {
 
 .topbar__pawns {
   display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
   gap: 3.6px;
   margin-left: 3.6px;
 }
 
 /* кружки поселенцев сделаны компактнее по просьбе владельца (исключение из правила 44 px) */
 .topbar__pawns button {
-  width: 32.4px;
-  height: 32.4px;
+  /* при большом числе поселенцев кружки сжимаются, оставаясь круглыми */
+  flex: 0 1 32.4px;
+  min-width: 19px;
+  height: auto;
+  aspect-ratio: 1;
   padding: 0;
   border-radius: 50%;
   border: 2px solid transparent;
@@ -104,6 +110,7 @@ button {
 
 .topbar__speeds {
   display: flex;
+  flex: 0 0 auto;
   gap: 3.6px;
 }
 
@@ -1051,4 +1058,53 @@ body.has-card .warnings {
   background: #9a6b43;
   border-radius: 1px;
   transform: rotate(45deg) scale(0.8);
+}
+
+/* ---------- Этап 5c: ремесло ---------- */
+.resources__dot--medkit {
+  background: #e8e6e1;
+  border: 2px solid #d8524a;
+  box-sizing: border-box;
+}
+
+/* таблица работ: компактная фиксированная сетка, чтобы 8 столбцов и до 6 поселенцев помещались */
+.worktable {
+  table-layout: fixed;
+}
+.worktable th:first-child {
+  width: 62px;
+}
+.worktable th {
+  padding: 3px 2px;
+  font-size: 10.5px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.worktable td {
+  padding: 3px 2px;
+}
+.worktable__hint {
+  display: none;
+}
+.worktable th .avatar {
+  display: flex;
+  margin: 0 auto 2px;
+}
+.worktable__name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+.worktable .prio {
+  width: 100%;
+  max-width: 42px;
+  height: 36px;
+  font-size: 14px;
+}
+.worktable--dense th {
+  font-size: 9.2px;
+  overflow-wrap: normal;
 }

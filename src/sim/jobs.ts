@@ -6,12 +6,15 @@ import {
   BUSH_REGROW_TICKS,
   CARRY_MAX,
   COOK,
+  CRAFT,
   CROP,
   DECONSTRUCT,
   FOOD_VALUE,
   HEALTH,
+  HERB,
   MOOD,
   NEEDS,
+  RECIPES,
   SICK,
   STROLL,
   STONE_PER_ROCK,
@@ -20,6 +23,7 @@ import {
 } from './balance';
 import { blocksMovement, kindOfStructure, type BuildKind } from './build';
 import { engage } from './combat';
+import { isMature, kindOfCrop, type CropKind } from './crops';
 import { isFood, isWeapon, type ItemKind } from './items';
 import { addThought } from './mood';
 import { Structure, Terrain } from './map';
@@ -46,7 +50,7 @@ export type WorkType =
 export const WORK_TYPES: readonly WorkType[] = [
   'firefighting', 'doctor', 'cooking', 'hunting', 'construction', 'plants', 'mining', 'crafting', 'hauling', 'cleaning', 'research',
 ];
-export const IMPLEMENTED_WORKS: readonly WorkType[] = ['construction', 'cooking', 'doctor', 'plants', 'mining', 'hauling', 'cleaning'];
+export const IMPLEMENTED_WORKS: readonly WorkType[] = ['construction', 'cooking', 'crafting', 'doctor', 'plants', 'mining', 'hauling', 'cleaning'];
 
 export type JobKind =
   | 'chop'
@@ -59,6 +63,7 @@ export type JobKind =
   | 'build'
   | 'deconstruct'
   | 'cook'
+  | 'craft'
   | 'equip'
   | 'fight'
   | 'treat'
@@ -90,6 +95,12 @@ export interface Job {
   wait?: number;
   /** Номер пациента (лечение, спасение, похороны). */
   patientId?: number;
+  /** Рецепт верстака. */
+  recipe?: keyof typeof RECIPES;
+  /** Что сажаем. */
+  crop?: CropKind;
+  /** Лечим с аптечкой. */
+  kit?: boolean;
 }
 
 /** Слои резервирования: один объект — один исполнитель. */
@@ -105,7 +116,7 @@ export interface Plan {
 
 /** Задачи, которые можно прервать срочной нуждой. */
 export const WORK_JOB_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
-  'chop', 'mine', 'harvest', 'sow', 'reap', 'haul', 'deliver', 'build', 'deconstruct', 'cook', 'treat', 'rescue', 'bury',
+  'chop', 'mine', 'harvest', 'sow', 'reap', 'haul', 'deliver', 'build', 'deconstruct', 'cook', 'craft', 'treat', 'rescue', 'bury',
 ]);
 
 const NEIGHBORS: readonly (readonly [number, number])[] = [
@@ -225,9 +236,11 @@ function planHarvest(world: World, pawn: Pawn): Plan | null {
 /** Посев на пустых клетках огорода. */
 function planSow(world: World, pawn: Pawn): Plan | null {
   const cands: number[] = [];
-  for (const idx of world.garden) {
-    if (world.map.crops.has(idx) || world.blueprints.has(idx) || world.map.structure[idx] !== Structure.None) continue;
-    if (world.isFree(Layer.Crop, idx, pawn.id)) cands.push(idx);
+  for (const set of [world.garden, world.herbs]) {
+    for (const idx of set) {
+      if (world.map.crops.has(idx) || world.blueprints.has(idx) || world.map.structure[idx] !== Structure.None) continue;
+      if (world.isFree(Layer.Crop, idx, pawn.id)) cands.push(idx);
+    }
   }
   return bestOf(
     cands,
@@ -238,7 +251,7 @@ function planSow(world: World, pawn: Pawn): Plan | null {
       const r = route(world, pawn, [target]);
       if (!r) return null;
       return {
-        job: { kind: 'sow', phase: 'move', target, progress: 0, duration: 0 },
+        job: { kind: 'sow', phase: 'move', target, crop: world.herbs.has(idx) ? 'herb' : 'rice', progress: 0, duration: 0 },
         path: r.path,
         cost: r.cost,
         reserve: [[Layer.Crop, idx]],
@@ -251,7 +264,7 @@ function planSow(world: World, pawn: Pawn): Plan | null {
 function planReap(world: World, pawn: Pawn): Plan | null {
   const cands: number[] = [];
   for (const [idx, c] of world.map.crops) {
-    if (c.growth >= CROP.growTicks && world.isFree(Layer.Crop, idx, pawn.id)) cands.push(idx);
+    if (isMature(c) && world.isFree(Layer.Crop, idx, pawn.id)) cands.push(idx);
   }
   return bestOf(
     cands,
@@ -529,7 +542,79 @@ function planBury(world: World, pawn: Pawn): Plan | null {
   );
 }
 
+/** Что выгодно сделать на верстаке сейчас: аптечки всегда, оружие — когда пора готовиться к набегам. */
+function chooseRecipe(world: World): keyof typeof RECIPES | null {
+  const have = (k: 'club' | 'bow' | 'medkit' | 'herb' | 'wood') => world.items.total(k);
+  if (have('medkit') < CRAFT.medkitTarget && have('herb') >= RECIPES.medkit.count) return 'medkit';
+  const day = calendar(world.tickCount).day;
+  if (day < CRAFT.weaponsFromDay && world.story.raidsDone === 0) return null;
+  const living = world.living;
+  const armed = (w: 'club' | 'bow') => living.filter((p) => p.weapon === w).length;
+  if (have('club') + armed('club') < Math.max(3, living.length) && have('wood') >= RECIPES.club.count) return 'club';
+  if (have('bow') + armed('bow') < Math.ceil(living.length / 2) && have('wood') >= RECIPES.bow.count) return 'bow';
+  return null;
+}
+
+/** Мастерская: несём материал к свободному верстаку и мастерим изделие. */
+function planCraft(world: World, pawn: Pawn): Plan | null {
+  const recipe = chooseRecipe(world);
+  if (!recipe) return null;
+  const need = RECIPES[recipe];
+  const benches = world.cellsWith(Structure.Bench).filter((i) => world.isFree(Layer.Dest, i, pawn.id));
+  if (benches.length === 0) return null;
+  const stacks: number[] = [];
+  for (const [idx, s] of world.items.stacks) if (s.kind === need.input && s.count >= need.count && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
+  return bestOf(
+    stacks,
+    (idx) => pointOf(world, idx),
+    originOf(pawn),
+    (idx) => {
+      const target = pointOf(world, idx);
+      let bench = -1;
+      let bestD = Infinity;
+      for (const b of benches) {
+        const p = pointOf(world, b);
+        const d = octile(p.x - target.x, p.y - target.y);
+        if (d < bestD) {
+          bestD = d;
+          bench = b;
+        }
+      }
+      const dest = pointOf(world, bench);
+      if (!findPathToAny(world.map, target.x, target.y, adjacentPassable(world, dest))) return null;
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'craft', phase: 'move', target, dest, recipe, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Item, idx], [Layer.Dest, bench]],
+      };
+    },
+  );
+}
+
+/** Тратит одну аптечку (с ближайшей стопки). */
+function useMedkit(world: World, pawn: Pawn): boolean {
+  let best = -1;
+  let bestD = Infinity;
+  for (const [idx, s] of world.items.stacks) {
+    if (s.kind !== 'medkit' || s.count <= 0) continue;
+    const p = pointOf(world, idx);
+    const d = octile(p.x - pawn.cx, p.y - pawn.cy);
+    if (d < bestD) {
+      bestD = d;
+      best = idx;
+    }
+  }
+  if (best < 0) return false;
+  world.items.take(best, 1);
+  world.addLog(`Использована аптечка — ${pawn.name}`);
+  return true;
+}
+
 const PLANNERS: Partial<Record<WorkType, (world: World, pawn: Pawn) => Plan | null>> = {
+  crafting: planCraft,
   doctor: (w, p) => cheaper(planTreat(w, p), planRescue(w, p)),
   cleaning: planBury,
   cooking: planCook,
@@ -710,7 +795,10 @@ export function planStroll(world: World, pawn: Pawn): Plan {
 function planEquip(world: World, pawn: Pawn): Plan | null {
   if (pawn.weapon !== null) return null;
   const stacks: number[] = [];
-  for (const [idx, s] of world.items.stacks) if (isWeapon(s.kind) && s.count > 0 && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
+  // опытный стрелок предпочитает лук, остальные — дубину; если нужного нет, берут любое
+  const wanted = pawn.skills.shooting >= 7 ? 'bow' : 'club';
+  for (const [idx, s] of world.items.stacks) if (s.kind === wanted && s.count > 0 && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
+  if (stacks.length === 0) for (const [idx, s] of world.items.stacks) if (isWeapon(s.kind) && s.count > 0 && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
   return bestOf(
     stacks,
     (idx) => pointOf(world, idx),
@@ -865,9 +953,11 @@ function stillValid(world: World, pawn: Pawn, job: Job): boolean {
     case 'harvest':
       return (world.map.bushes.get(idx)?.berries ?? 0) >= 1;
     case 'sow':
-      return world.garden.has(idx) && !world.map.crops.has(idx) && !world.blueprints.has(idx) && world.map.structure[idx] === Structure.None;
-    case 'reap':
-      return (world.map.crops.get(idx)?.growth ?? 0) >= CROP.growTicks;
+      return (world.garden.has(idx) || world.herbs.has(idx)) && !world.map.crops.has(idx) && !world.blueprints.has(idx) && world.map.structure[idx] === Structure.None;
+    case 'reap': {
+      const c = world.map.crops.get(idx);
+      return !!c && isMature(c);
+    }
     case 'build': {
       const bp = world.blueprints.get(idx);
       return !!bp && bp.delivered >= BUILD[bp.kind].count;
@@ -898,6 +988,10 @@ function stillValid(world: World, pawn: Pawn, job: Job): boolean {
       if (world.map.structure[idxOf(world, job.dest!)] !== Structure.Stove) return false;
       if (job.phase === 'move2' || job.phase === 'act2') return true;
       return (world.items.stacks.get(idx)?.count ?? 0) >= COOK.raw;
+    case 'craft':
+      if (world.map.structure[idxOf(world, job.dest!)] !== Structure.Bench) return false;
+      if (job.phase === 'move2' || job.phase === 'act2') return true;
+      return (world.items.stacks.get(idx)?.count ?? 0) >= RECIPES[job.recipe!].count;
     case 'deliver': {
       if (!world.blueprints.has(idxOf(world, job.dest!))) return false;
       if (job.phase === 'move2' || job.phase === 'act2') return true;
@@ -930,6 +1024,8 @@ function skillOf(kind: JobKind): SkillId | null {
       return 'construction';
     case 'cook':
       return 'cooking';
+    case 'craft':
+      return 'crafting';
     case 'treat':
     case 'rescue':
       return 'medicine';
@@ -967,12 +1063,14 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
     }
     case 'sow':
       job.phase = 'act';
-      job.duration = CROP.sowTicks / speed;
+      job.duration = (job.crop === 'herb' ? HERB.sowTicks : CROP.sowTicks) / speed;
       return;
-    case 'reap':
+    case 'reap': {
+      const c = world.map.crops.get(idxOf(world, job.target));
       job.phase = 'act';
-      job.duration = CROP.reapTicks / speed;
+      job.duration = ((c && kindOfCrop(c) === 'herb' ? HERB.reapTicks : CROP.reapTicks) ) / speed;
       return;
+    }
     case 'build':
       job.phase = 'act';
       job.duration = 1;
@@ -987,12 +1085,14 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
     case 'haul':
     case 'deliver':
     case 'cook':
+    case 'craft':
       if (job.phase === 'move') {
         job.phase = 'act';
         job.duration = WORK_TICKS.pickup;
       } else {
         job.phase = 'act2';
-        job.duration = job.kind === 'cook' ? COOK.ticks / speed : WORK_TICKS.drop;
+        job.duration =
+          job.kind === 'cook' ? COOK.ticks / speed : job.kind === 'craft' ? RECIPES[job.recipe!].ticks / speed : WORK_TICKS.drop;
       }
       return;
     case 'equip':
@@ -1006,8 +1106,10 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
         endJob(world, pawn);
         return;
       }
+      // если на карте есть аптечка — лечим быстрее и качественнее (она расходуется при перевязке)
+      job.kit = world.items.total('medkit') > 0;
       job.phase = 'act';
-      job.duration = HEALTH.treatTicks / speed;
+      job.duration = (HEALTH.treatTicks * (job.kit ? CRAFT.medkitTreatFactor : 1)) / speed;
       return;
     }
     case 'rescue':
@@ -1083,14 +1185,17 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
       return;
     }
     case 'sow':
-      world.map.crops.set(idx, { growth: 0 });
+      world.map.crops.set(idx, job.crop === 'herb' ? { growth: 0, kind: 'herb' } : { growth: 0 });
       endJob(world, pawn);
       return;
-    case 'reap':
+    case 'reap': {
+      const c = world.map.crops.get(idx);
       world.map.crops.delete(idx);
-      world.items.drop('rice', CROP.yield, x, y);
+      if (c && kindOfCrop(c) === 'herb') world.items.drop('herb', HERB.yield, x, y);
+      else world.items.drop('rice', CROP.yield, x, y);
       endJob(world, pawn);
       return;
+    }
     case 'eat': {
       let eaten = 0;
       let value: number = FOOD_VALUE.berries;
@@ -1118,6 +1223,7 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
     case 'haul':
     case 'deliver':
     case 'cook':
+    case 'craft':
       if (job.phase === 'act') pickUp(world, pawn, job);
       else dropAtDest(world, pawn, job);
       return;
@@ -1128,6 +1234,7 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
         w.treated = true;
         w.bleed = 0;
         w.quality = 1 + pawn.skills.medicine * HEALTH.qualityPerSkill;
+        if (job.kit && useMedkit(world, pawn)) w.quality *= CRAFT.medkitQuality;
       }
       endJob(world, pawn);
       return;
@@ -1214,6 +1321,9 @@ function pickUp(world: World, pawn: Pawn, job: Job): void {
   let limit: number;
   if (job.kind === 'cook') {
     limit = stack.count >= COOK.raw ? COOK.raw : 0;
+  } else if (job.kind === 'craft') {
+    const need = RECIPES[job.recipe!].count;
+    limit = stack.count >= need ? need : 0;
   } else if (job.kind === 'deliver') {
     const bp = world.blueprints.get(destIdx);
     if (!bp) {
@@ -1233,7 +1343,7 @@ function pickUp(world: World, pawn: Pawn, job: Job): void {
   pawn.carrying = { kind, count: world.items.take(idx, amount) };
   world.release(Layer.Item, idx, pawn.id);
   const path =
-    job.kind === 'cook'
+    job.kind === 'cook' || job.kind === 'craft'
       ? findPathToAny(world.map, pawn.cx, pawn.cy, adjacentPassable(world, dest))
       : findPath(world.map, pawn.cx, pawn.cy, dest.x, dest.y);
   if (!path) {
@@ -1253,6 +1363,13 @@ function dropAtDest(world: World, pawn: Pawn, job: Job): void {
     // сырьё израсходовано, у плиты появляются обеды
     pawn.carrying = null;
     if (c) world.items.drop('meal', COOK.meals, pawn.cx, pawn.cy);
+    endJob(world, pawn);
+    return;
+  }
+  if (job.kind === 'craft') {
+    // материал израсходован, у верстака появляется изделие
+    pawn.carrying = null;
+    if (c) world.items.drop(RECIPES[job.recipe!].output, 1, pawn.cx, pawn.cy);
     endJob(world, pawn);
     return;
   }

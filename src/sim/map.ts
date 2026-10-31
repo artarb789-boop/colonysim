@@ -21,12 +21,14 @@ const COST_BY_TERRAIN: readonly number[] = [
 ];
 
 /** Постройки поверх местности (одна на клетку). Пол хранится отдельным слоем. */
-export const Structure = { None: 0, Wall: 1, Door: 2, Bed: 3, Stove: 4 } as const;
+export const Structure = { None: 0, Wall: 1, Door: 2, Bed: 3, Stove: 4, Bench: 5 } as const;
 export type StructureId = (typeof Structure)[keyof typeof Structure];
 
 export interface Crop {
-  /** Тиков роста; созрел при growth >= CROP.growTicks. */
+  /** Тиков роста; созрел при growth >= growTicksOf(crop). */
   growth: number;
+  /** Что растёт; нет поля — рис (старые сохранения). */
+  kind?: 'rice' | 'herb';
 }
 
 export interface Bush {
@@ -75,6 +77,7 @@ export class GameMap {
     switch (this.structure[i]) {
       case Structure.Wall:
       case Structure.Stove:
+      case Structure.Bench:
         return Infinity;
       case Structure.Door:
         return MOVE_COST.door;

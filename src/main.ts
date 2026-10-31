@@ -148,6 +148,7 @@ const TOOL_EMPTY: Record<Tool, string> = {
   mine: 'Здесь нет камня',
   zone: 'Сюда нельзя положить склад',
   garden: 'Здесь нельзя разметить огород',
+  herbs: 'Здесь нельзя разметить грядку трав',
   deconstruct: 'Здесь нечего разбирать',
   erase: 'Здесь нечего стирать',
   wall: 'Здесь нельзя строить',
@@ -155,6 +156,7 @@ const TOOL_EMPTY: Record<Tool, string> = {
   floor: 'Здесь нельзя строить',
   bed: 'Здесь нельзя строить',
   stove: 'Здесь нельзя строить',
+  bench: 'Здесь нельзя строить',
 };
 
 type Cell = { x: number; y: number };

@@ -27,11 +27,12 @@ export const STRUCTURE_OF: Record<Exclude<BuildKind, 'floor'>, StructureId> = {
   door: Structure.Door,
   bed: Structure.Bed,
   stove: Structure.Stove,
+  bench: Structure.Bench,
 };
 
 /** Перекрывает ли готовая постройка проход. */
 export function blocksMovement(kind: BuildKind): boolean {
-  return kind === 'wall' || kind === 'stove';
+  return kind === 'wall' || kind === 'stove' || kind === 'bench';
 }
 
 /** Вид постройки по коду структуры (для разборки). */
@@ -41,6 +42,7 @@ export function kindOfStructure(id: number): Exclude<BuildKind, 'floor'> | null 
     case Structure.Door: return 'door';
     case Structure.Bed: return 'bed';
     case Structure.Stove: return 'stove';
+    case Structure.Bench: return 'bench';
     default: return null;
   }
 }

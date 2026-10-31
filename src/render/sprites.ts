@@ -194,6 +194,22 @@ function buildStructureSprite(kind: BuildKind): HTMLCanvasElement {
       p.rect(3, 13, 10, 1, '#58406A');
       break;
     }
+    case 'bench': {
+      p.rect(1, 5, 14, 9, '#4A3320');
+      p.rect(1, 4, 14, 3, '#9A7A4C');
+      p.rect(1, 4, 14, 1, '#B89A66');
+      p.rect(2, 7, 12, 6, '#7A5A36');
+      p.rect(2, 7, 12, 1, '#5E4428');
+      p.rect(2, 13, 2, 2, '#3E2A18');
+      p.rect(12, 13, 2, 2, '#3E2A18');
+      // инструменты на столе: молоток и пила
+      p.rect(4, 2, 1, 3, '#A97A4A');
+      p.rect(3, 1, 3, 1, '#8D8D93');
+      p.rect(8, 3, 5, 1, '#C9C6BF');
+      p.px(8, 2, '#8A5A33');
+      p.px(9, 2, '#8A5A33');
+      break;
+    }
     case 'stove': {
       p.rect(1, 1, 14, 14, '#2B2E32');
       p.rect(2, 2, 12, 8, '#50555B');
@@ -240,9 +256,21 @@ function buildBush(): HTMLCanvasElement {
 }
 
 /** Стадии посева: 0 росток, 1 растёт, 2 созрел. */
-function buildCrop(stage: 0 | 1 | 2): HTMLCanvasElement {
+function buildCrop(stage: 0 | 1 | 2, herb = false): HTMLCanvasElement {
   const [c, ctx] = canvas();
   const p = new Pix(ctx);
+  if (herb) {
+    // целебная трава: низкий куст, к созреванию — розовые цветки
+    p.rect(6, 13, 5, 1, '#3A2D1F');
+    const leaves = stage === 0 ? [[8, 11]] : stage === 1 ? [[6, 10], [8, 9], [10, 10], [8, 11]] : [[5, 9], [8, 7], [11, 9], [7, 11], [10, 11]];
+    for (const [x, y] of leaves as [number, number][]) {
+      p.rect(x, y, 1, 3, '#4F8A44');
+      p.px(x - 1, y + 1, '#6BAA5C');
+      p.px(x + 1, y, '#6BAA5C');
+    }
+    if (stage === 2) for (const [x, y] of [[5, 8], [8, 6], [11, 8], [7, 10]] as const) { p.px(x, y, '#F08A7E'); p.px(x + 1, y, '#F6B6AE'); }
+    return c;
+  }
   if (stage === 0) {
     p.rect(8, 10, 1, 3, '#4F8A44');
     p.px(7, 10, '#6BAA5C');
@@ -338,6 +366,24 @@ function buildItem(kind: ItemKind): HTMLCanvasElement {
       p.px(1, 9, '#E8E6E1');
       break;
     }
+    case 'herb':
+      for (const x of [5, 8, 11]) {
+        p.rect(x, 6, 1, 8, '#4F8A44');
+        p.px(x - 1, 8, '#6BAA5C');
+        p.px(x + 1, 7, '#6BAA5C');
+        p.px(x, 5, '#F08A7E');
+        p.px(x + 1, 5, '#F6B6AE');
+      }
+      p.rect(4, 13, 9, 1, '#6E6240');
+      break;
+    case 'medkit':
+      p.rect(2, 4, 12, 10, '#9A9AA0');
+      p.rect(3, 5, 10, 8, '#E8E6E1');
+      p.rect(2, 4, 12, 1, '#C9C6BF');
+      p.rect(7, 6, 2, 6, '#D8524A');
+      p.rect(5, 8, 6, 2, '#D8524A');
+      p.rect(6, 2, 4, 2, '#7C8491');
+      break;
     case 'silver':
       p.disc(7, 11, 3.6, '#7C8491');
       p.disc(7, 10, 3.4, '#D5DAE0');
@@ -405,8 +451,9 @@ export const treeSprite = (): HTMLCanvasElement => (treeSpriteCache ??= buildTre
 let bushSpriteCache: HTMLCanvasElement | null = null;
 export const bushSprite = (): HTMLCanvasElement => (bushSpriteCache ??= buildBush());
 const cropCache: (HTMLCanvasElement | undefined)[] = [];
-export function cropSprite(stage: 0 | 1 | 2): HTMLCanvasElement {
-  return (cropCache[stage] ??= buildCrop(stage));
+export function cropSprite(stage: 0 | 1 | 2, herb = false): HTMLCanvasElement {
+  const k = stage + (herb ? 3 : 0);
+  return (cropCache[k] ??= buildCrop(stage, herb));
 }
 
 const pawnCache = new Map<string, HTMLCanvasElement>();

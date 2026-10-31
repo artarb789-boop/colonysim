@@ -18,15 +18,31 @@ export const WORK_LABELS: Record<WorkType, string> = {
   research: 'Исследования',
 };
 
+/** Короткие названия для заголовков таблицы работ. */
+export const WORK_SHORT: Record<WorkType, string> = {
+  firefighting: 'Тушение',
+  doctor: 'Лечение',
+  cooking: 'Готовка',
+  hunting: 'Охота',
+  construction: 'Стройка',
+  plants: 'Растения',
+  mining: 'Добыча',
+  crafting: 'Ремесло',
+  hauling: 'Переноска',
+  cleaning: 'Уборка',
+  research: 'Наука',
+};
+
 export const WORK_HINTS: Partial<Record<WorkType, string>> = {
   construction: 'стройка, подвоз, разборка',
   cooking: 'обеды на плите',
-  plants: 'рубка, ягоды, огород',
+  crafting: 'дубины, луки, аптечки',
+  plants: 'рубка, ягоды, огород, травы',
   mining: 'добыча камня',
   hauling: 'на склад-зону',
 };
 
-export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис', meal: 'Обеды', silver: 'Серебро', club: 'Дубины', bow: 'Луки' };
+export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис', meal: 'Обеды', silver: 'Серебро', club: 'Дубины', bow: 'Луки', herb: 'Травы', medkit: 'Аптечки' };
 
 const JOB_LABELS: Record<JobKind, string> = {
   chop: 'Рубит дерево',
@@ -39,6 +55,7 @@ const JOB_LABELS: Record<JobKind, string> = {
   build: 'Строит',
   deconstruct: 'Разбирает',
   cook: 'Готовит обед',
+  craft: 'Мастерит',
   wander: 'Срыв: бродит',
   stroll: 'Прогуливается',
   equip: 'Берёт оружие',
@@ -61,6 +78,7 @@ export function jobLabel(p: Pawn): string {
   if (j.kind === 'haul' && j.phase === 'move') return 'Идёт за грузом';
   if (j.kind === 'deliver' && j.phase === 'move') return 'Идёт за материалами';
   if (j.kind === 'cook' && j.phase === 'move') return 'Идёт за продуктами';
+  if (j.kind === 'craft' && j.phase === 'move') return 'Идёт за материалом';
   if (j.kind === 'sleep' && j.phase === 'move') return 'Идёт спать';
   if ((j.kind === 'sleep' || j.kind === 'relax') && j.phase === 'move') return 'Устал, ищет место';
   return JOB_LABELS[j.kind];

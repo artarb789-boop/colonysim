@@ -13,6 +13,7 @@ export const TOOL_COLORS: Record<Tool, string> = {
   mine: '#E8A33D',
   zone: '#8FBF5A',
   garden: '#C9B458',
+  herbs: '#6EC896',
   deconstruct: '#F08A7E',
   erase: '#F08A7E',
   wall: '#5AA9E6',
@@ -20,4 +21,5 @@ export const TOOL_COLORS: Record<Tool, string> = {
   floor: '#5AA9E6',
   bed: '#5AA9E6',
   stove: '#5AA9E6',
+  bench: '#5AA9E6',
 };

@@ -10,7 +10,7 @@ import { moodEntries } from '../sim/mood';
 import { TRAITS } from '../sim/traits';
 import { buy, buyPrice, canBuy, canSell, GOODS, sell, sellPrice, type Good } from '../sim/trade';
 import { SKILLS, type SkillId } from '../sim/pawn';
-import { ITEM_LABELS, NEED_LABELS, SKILL_LABELS, THOUGHT_LABELS, WORK_HINTS, WORK_LABELS, jobLabel, jobProgress, moodClass } from './labels';
+import { ITEM_LABELS, NEED_LABELS, SKILL_LABELS, THOUGHT_LABELS, WORK_HINTS, WORK_LABELS, WORK_SHORT, jobLabel, jobProgress, moodClass } from './labels';
 
 export interface HudCallbacks {
   onSelectPawn(id: number | null): void;
@@ -57,7 +57,9 @@ const BUILD_BUTTONS: { tool: Tool; label: string }[] = [
   { tool: 'floor', label: 'Пол' },
   { tool: 'bed', label: 'Кровать' },
   { tool: 'stove', label: 'Плита' },
+  { tool: 'bench', label: 'Верстак' },
   { tool: 'garden', label: 'Огород' },
+  { tool: 'herbs', label: 'Травы' },
   { tool: 'deconstruct', label: 'Разобрать' },
   { tool: 'erase', label: 'Стереть' },
 ];
@@ -67,6 +69,7 @@ const TOOL_HINTS: Record<string, string> = {
   mine: 'Проведите по камню, чтобы пометить его на добычу',
   zone: 'Проведите по карте, чтобы отметить склад-зону',
   garden: 'Проведите по карте, чтобы разметить огород — там вырастет рис',
+  herbs: 'Проведите по карте, чтобы разметить грядку целебных трав (из них делают аптечки)',
   deconstruct: 'Проведите по постройкам, чтобы разобрать их (вернётся половина материалов)',
   erase: 'Проведите, чтобы убрать приказы, зоны и чертежи',
   wall: 'Стена — проведите линию',
@@ -74,6 +77,7 @@ const TOOL_HINTS: Record<string, string> = {
   floor: 'Пол — проведите область',
   bed: 'Кровать — тап или область',
   stove: 'Плита — тап или область',
+  bench: 'Верстак — дубины, луки и аптечки',
 };
 
 function toolHint(tool: Tool): string {
@@ -233,7 +237,7 @@ export class Hud {
 
   private buildResources(root: HTMLElement): void {
     this.resources.append(this.weather);
-    for (const kind of ['wood', 'stone', 'berries', 'rice', 'meal', 'silver', 'weapon'] as const) {
+    for (const kind of ['wood', 'stone', 'berries', 'rice', 'meal', 'silver', 'weapon', 'medkit'] as const) {
       const item = el('div', 'resources__item');
       item.append(el('span', `resources__dot resources__dot--${kind}`), el('span', 'resources__label', kind === 'weapon' ? 'Оружие' : ITEM_LABELS[kind]));
       const v = el('span', 'resources__value mono', '0');
@@ -545,7 +549,7 @@ export class Hud {
       const pawns = this.world.living;
       const works = IMPLEMENTED_WORKS;
       const portrait = this.portrait.matches;
-      const table = el('table', 'worktable');
+      const table = el('table', portrait ? 'worktable' : 'worktable worktable--dense');
 
       const cell = (pawnId: number, work: WorkType): HTMLTableCellElement => {
         const td = el('td');
@@ -577,9 +581,9 @@ export class Hud {
       };
       const workHead = (w: WorkType): HTMLTableCellElement => {
         const th = el('th');
-        th.append(el('span', 'worktable__work', WORK_LABELS[w]));
+        th.append(el('span', 'worktable__work', WORK_SHORT[w]));
         const hint = WORK_HINTS[w];
-        if (hint) th.append(el('span', 'worktable__hint', hint));
+        th.title = hint ? `${WORK_LABELS[w]}: ${hint}` : WORK_LABELS[w];
         return th;
       };
 
@@ -756,6 +760,7 @@ export class Hud {
     setText(this.resEls.get('meal')!, String(stock.meal));
     setText(this.resEls.get('silver')!, String(stock.silver));
     setText(this.resEls.get('weapon')!, String(stock.club + stock.bow));
+    setText(this.resEls.get('medkit')!, String(stock.medkit));
     this.side.get('Тревога')!.classList.toggle('active', this.world.alarm);
     this.updateWeather();
     this.updateEvents();

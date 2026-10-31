@@ -1,4 +1,5 @@
-import { BUILD, BUSH_MAX_BERRIES, CROP } from '../sim/balance';
+import { BUILD, BUSH_MAX_BERRIES } from '../sim/balance';
+import { growTicksOf, kindOfCrop } from '../sim/crops';
 import { totalDamage } from '../sim/health';
 import type { Pawn } from '../sim/pawn';
 import { jobFraction } from '../sim/jobs';
@@ -213,13 +214,18 @@ export class Renderer {
       const r = this.cellRect(cam, idx);
       if (this.visible(r)) ctx.fillRect(r.x, r.y, r.s, r.s);
     }
+    ctx.fillStyle = 'rgba(110,200,150,0.22)';
+    for (const idx of world.herbs) {
+      const r = this.cellRect(cam, idx);
+      if (this.visible(r)) ctx.fillRect(r.x, r.y, r.s, r.s);
+    }
 
     // посевы: три стадии роста
     for (const [idx, c] of world.map.crops) {
       const r = this.cellRect(cam, idx);
       if (!this.visible(r)) continue;
-      const f = c.growth / CROP.growTicks;
-      ctx.drawImage(cropSprite(f >= 1 ? 2 : f >= 0.4 ? 1 : 0), r.x, r.y, r.s, r.s);
+      const f = c.growth / growTicksOf(c);
+      ctx.drawImage(cropSprite(f >= 1 ? 2 : f >= 0.4 ? 1 : 0, kindOfCrop(c) === 'herb'), r.x, r.y, r.s, r.s);
     }
 
     // приказы на деревья, камень, разборку

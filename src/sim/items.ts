@@ -1,8 +1,8 @@
 import { DROP_SEARCH_RADIUS, STACK_MAX } from './balance';
 import type { GameMap } from './map';
 
-export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice' | 'meal' | 'silver' | 'club' | 'bow';
-export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice', 'meal', 'silver', 'club', 'bow'];
+export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice' | 'meal' | 'silver' | 'club' | 'bow' | 'herb' | 'medkit';
+export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice', 'meal', 'silver', 'club', 'bow', 'herb', 'medkit'];
 
 /** Оружие, которое можно взять в руки. */
 export type WeaponItem = 'club' | 'bow';

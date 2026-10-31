@@ -15,8 +15,9 @@ import { World, type Designation } from './world';
  * 3: этап 4 (рассказчик, журнал; черты, болезнь, температурные состояния у поселенцев).
  * 4: этап 5a (раны, кровь, смерть у поселенцев).
  * 5: этап 5b (налётчики, тревога, оружие, набеги в рассказчике).
+ * 6: этап 5c (грядка трав, вид культуры у посева; верстак).
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 export interface SaveData {
   version: number;
@@ -33,6 +34,8 @@ export interface SaveData {
   designations: [number, Designation][];
   zone: number[];
   garden: number[];
+  /** Грядка целебных трав (нет в старых сохранениях). */
+  herbs?: number[];
   blueprints: [number, Blueprint][];
   reservations: [number, number][];
   /** Состояние ГПСЧ симуляции (может отсутствовать в старых сохранениях). */
@@ -67,6 +70,7 @@ export function serializeWorld(w: World): SaveData {
       designations: [...w.designations],
       zone: [...w.zone],
       garden: [...w.garden],
+      herbs: [...w.herbs],
       blueprints: [...w.blueprints],
       reservations: w.exportReservations(),
       rng: w.rng.getState(),
@@ -95,7 +99,8 @@ function migrate(raw: unknown): unknown {
   }
   if (raw.version === 2) return migrate({ ...raw, version: 3 });
   if (raw.version === 3) return migrate({ ...raw, version: 4 });
-  if (raw.version === 4) return { ...raw, version: 5 };
+  if (raw.version === 4) return migrate({ ...raw, version: 5 });
+  if (raw.version === 5) return { ...raw, version: 6 };
   return raw.version === SAVE_VERSION ? raw : null;
 }
 
@@ -164,6 +169,7 @@ export function restoreWorld(data: unknown): World | null {
   for (const [k, v] of d.designations) w.designations.set(k, v);
   for (const k of d.zone) w.zone.add(k);
   for (const k of d.garden) w.garden.add(k);
+  for (const k of d.herbs ?? []) w.herbs.add(k);
   for (const [k, v] of d.blueprints) w.blueprints.set(k, v);
   w.importReservations(d.reservations);
   for (const p of d.pawns) {

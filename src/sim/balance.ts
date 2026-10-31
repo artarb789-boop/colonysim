@@ -99,6 +99,7 @@ export const BUILD = {
   floor: { item: 'wood', count: 1, ticks: 40 },
   bed: { item: 'wood', count: 10, ticks: 150 },
   stove: { item: 'stone', count: 8, ticks: 200 },
+  bench: { item: 'wood', count: 12, ticks: 180 },
 } as const;
 
 /** Разборка: доля материалов, которая возвращается, и доля времени от постройки. */
@@ -290,4 +291,25 @@ export const COMBAT = {
   /** Размер набега: 2 + прошлые набеги/2 + избыток колонистов, не больше 8; луки с третьего набега. */
   raidMaxSize: 8,
   equipTicks: 15,
+} as const;
+
+// ---------- Этап 5c: верстак, ремесло, лекарства ----------
+
+/** Целебная трава: отдельная культура огорода, быстрее риса. */
+export const HERB = { growTicks: Math.round(DAY_TICKS * 1.5), yield: 3, sowTicks: 60, reapTicks: 70 } as const;
+
+/** Рецепты верстака: из count единиц input получается одна единица output. */
+export const RECIPES = {
+  club: { input: 'wood', count: 5, ticks: 120, output: 'club' },
+  bow: { input: 'wood', count: 8, ticks: 180, output: 'bow' },
+  medkit: { input: 'herb', count: 2, ticks: 100, output: 'medkit' },
+} as const;
+
+/** Что делать на верстаке само: аптечки всегда, оружие — когда пора готовиться к набегам. */
+export const CRAFT = {
+  medkitTarget: 4,
+  weaponsFromDay: 10,
+  /** Аптечка: качество перевязки умножается, время сокращается. */
+  medkitQuality: 2,
+  medkitTreatFactor: 0.6,
 } as const;
