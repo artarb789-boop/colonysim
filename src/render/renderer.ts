@@ -397,6 +397,22 @@ export class Renderer {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(p.name.charAt(0), ps.x, ps.y + r * 0.06);
+      // «нос»: треугольник на краю круга показывает, куда смотрит поселенец
+      const fx = Math.cos(p.facing);
+      const fy = Math.sin(p.facing);
+      const tip = r * 1.5;
+      const base = r * 0.92;
+      const half = r * 0.38;
+      ctx.fillStyle = '#E8E6E1';
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(ps.x + fx * tip, ps.y + fy * tip);
+      ctx.lineTo(ps.x + fx * base - fy * half, ps.y + fy * base + fx * half);
+      ctx.lineTo(ps.x + fx * base + fy * half, ps.y + fy * base - fx * half);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
       if (p.carrying) {
         ctx.fillStyle = ITEM_COLORS[p.carrying.kind];
         ctx.fillRect(ps.x + r * 0.5, ps.y - r * 1.1, r * 0.7, r * 0.7);

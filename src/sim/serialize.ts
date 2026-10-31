@@ -141,6 +141,7 @@ export function restoreWorld(data: unknown): World | null {
     p.breakUntil ??= null;
     p.breakCooldownUntil ??= 0;
     p.ownedBed ??= null;
+    p.facing ??= Math.PI / 2;
     w.pawns.push(p);
   }
   if (typeof d.rng === 'number') w.rng.setState(d.rng);

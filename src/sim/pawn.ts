@@ -68,6 +68,8 @@ export interface Pawn {
   breakCooldownUntil: number;
   /** Клетка закреплённой кровати. */
   ownedBed: number | null;
+  /** Куда смотрит поселенец, радианы (0 — вправо, π/2 — вниз). */
+  facing: number;
 }
 
 export function createPawn(id: number, name: string, color: string, x: number, y: number, rng: Rng): Pawn {
@@ -99,6 +101,7 @@ export function createPawn(id: number, name: string, color: string, x: number, y
     breakUntil: null,
     breakCooldownUntil: 0,
     ownedBed: null,
+    facing: Math.PI / 2,
   };
 }
 
@@ -116,6 +119,8 @@ export function originOf(p: Pawn): Point {
 export function stepMovement(p: Pawn, map: GameMap): void {
   if (p.path.length === 0) return;
 
+  const dir = p.path[0]!;
+  if (dir.x !== p.cx || dir.y !== p.cy) p.facing = Math.atan2(dir.y - p.cy, dir.x - p.cx);
   const factor = p.needs.food <= 0 ? STARVING_SPEED_FACTOR : 1;
   let budget = (PAWN_SPEED * factor) / TICKS_PER_SECOND; // «расстояние» стоимостью 1, доступное за тик
   while (budget > 0 && p.path.length > 0) {

@@ -59,7 +59,18 @@ button {
 }
 
 .topbar__time {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.15;
   white-space: nowrap;
+}
+.topbar__day {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.topbar__clock {
+  font-size: 15px;
 }
 
 .topbar__fps {
@@ -71,19 +82,20 @@ button {
 
 .topbar__pawns {
   display: flex;
-  gap: 6px;
-  margin-left: 8px;
+  gap: 4px;
+  margin-left: 4px;
 }
 
+/* кружки поселенцев сделаны компактнее по просьбе владельца (исключение из правила 44 px) */
 .topbar__pawns button {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border-radius: 50%;
   border: 2px solid transparent;
   background: var(--pawn);
   color: var(--bg);
-  font: 600 17px system-ui, sans-serif;
+  font: 600 15px system-ui, sans-serif;
 }
 
 .topbar__pawns button.selected {
@@ -267,7 +279,7 @@ body.orders-open .orders__hint {
 }
 
 body.has-card .warnings {
-  right: calc(316px + var(--sar));
+  right: calc(256px + var(--sar));
 }
 
 .chip {
@@ -290,11 +302,13 @@ body.has-card .warnings {
 
 .pawncard {
   position: fixed;
-  top: calc(var(--top) + var(--sat) + 8px);
-  right: calc(8px + var(--sar));
+  /* zoom 0.8 уменьшает и отступы, поэтому делим их на 0.8 */
+  top: calc((var(--top) + var(--sat) + 8px) / 0.8);
+  right: calc((8px + var(--sar)) / 0.8);
+  zoom: 0.8;
   width: 300px;
   box-sizing: border-box;
-  max-height: calc(100vh - var(--top) - var(--sat) - 16px);
+  max-height: calc((100vh - var(--top) - var(--sat) - 16px) / 0.8);
   display: flex;
   flex-direction: column;
   padding: 10px 12px;
@@ -339,7 +353,11 @@ body.has-card .warnings {
   min-height: 0;
   overflow-y: auto;
   touch-action: pan-y;
+  scrollbar-width: none;
   margin: 6px 0;
+}
+.pawncard__body::-webkit-scrollbar {
+  display: none;
 }
 .tabs {
   display: flex;
@@ -663,36 +681,11 @@ body.has-card .warnings {
 
 @media (orientation: portrait) {
   :root {
-    --top: 96px;
     --bottom: 52px;
   }
 
-  .topbar {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    grid-template-rows: 48px 48px;
-    grid-template-areas:
-      'time speeds'
-      'pawns fps';
-    align-items: center;
-    column-gap: 8px;
-    row-gap: 0;
-  }
-  .topbar__time {
-    grid-area: time;
-  }
-  .topbar__speeds {
-    grid-area: speeds;
-  }
-  .topbar__spacer {
-    display: none;
-  }
-  .topbar__pawns {
-    grid-area: pawns;
-    margin-left: 0;
-  }
   .topbar__fps {
-    grid-area: fps;
+    display: none;
   }
 
   .sidebar {
@@ -732,11 +725,11 @@ body.has-card .warnings {
 
   .pawncard {
     top: auto;
-    left: calc(8px + var(--sal));
-    right: calc(8px + var(--sar));
+    left: calc((8px + var(--sal)) / 0.8);
+    right: calc((8px + var(--sar)) / 0.8);
     width: auto;
-    max-height: 52vh;
-    bottom: calc(var(--bottom) + var(--sab) + 8px);
+    max-height: calc(52vh / 0.8);
+    bottom: calc((var(--bottom) + var(--sab) + 8px) / 0.8);
   }
 
   .orders {

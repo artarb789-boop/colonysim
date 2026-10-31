@@ -954,6 +954,13 @@ export function endJob(world: World, pawn: Pawn): void {
   cancelJob(world, pawn);
 }
 
+/** Во время работы поселенец смотрит на объект работы (если он не в той же клетке). */
+function faceWork(pawn: Pawn, job: Job): void {
+  if (job.kind === 'sleep' || job.kind === 'relax' || job.kind === 'wander') return;
+  const t = job.phase === 'act2' && job.dest ? job.dest : job.target;
+  if (t.x !== pawn.cx || t.y !== pawn.cy) pawn.facing = Math.atan2(t.y - pawn.cy, t.x - pawn.cx);
+}
+
 /** Один тик выполнения текущей задачи. */
 export function runJob(world: World, pawn: Pawn): void {
   const job = pawn.job;
@@ -979,6 +986,7 @@ export function runJob(world: World, pawn: Pawn): void {
     return;
   }
 
+  faceWork(pawn, job);
   job.progress++;
   if (job.kind === 'sleep') {
     if (pawn.needs.sleep >= NEEDS.sleepWake) {

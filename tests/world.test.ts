@@ -119,3 +119,39 @@ describe('gameTime', () => {
     expect(gameTime(DAY_TICKS).hour).toBe(6);
   });
 });
+
+describe('направление взгляда', () => {
+  it('при ходьбе смотрит по ходу движения', () => {
+    const w = solo();
+    w.moveTo(0, C + 3, C);
+    w.tick();
+    expect(w.pawns[0]!.facing).toBeCloseTo(0); // вправо
+    const w2 = solo();
+    w2.moveTo(0, C, C - 3);
+    w2.tick();
+    expect(w2.pawns[0]!.facing).toBeCloseTo(-Math.PI / 2); // вверх
+    const w3 = solo();
+    w3.moveTo(0, C - 3, C + 3);
+    w3.tick();
+    expect(w3.pawns[0]!.facing).toBeCloseTo((3 * Math.PI) / 4); // вниз-влево
+  });
+
+  it('при работе смотрит на объект и сохраняет взгляд после остановки', () => {
+    const w = new World(5, { pawnCount: 1, startItems: false });
+    for (let y = C - 8; y <= C + 8; y++) for (let x = C - 8; x <= C + 8; x++) w.map.set(x, y, 0);
+    w.map.bushes.clear();
+    w.map.set(C, C - 3, 4); // дерево над поселенцем
+    w.applyOrder('chop', C, C - 3, C, C - 3);
+    for (let i = 0; i < 40; i++) w.tick();
+    expect(w.pawns[0]!.job?.kind).toBe('chop');
+    expect(w.pawns[0]!.facing).toBeCloseTo(-Math.PI / 2);
+  });
+
+  it('взгляд переживает сохранение', async () => {
+    const { serializeWorld, restoreWorld } = await import('../src/sim/serialize');
+    const w = solo();
+    w.moveTo(0, C + 3, C);
+    w.tick();
+    expect(restoreWorld(serializeWorld(w))!.pawns[0]!.facing).toBeCloseTo(0);
+  });
+});

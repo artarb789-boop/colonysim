@@ -11,7 +11,9 @@ export interface PawnChip {
 export class TopBar {
   private readonly buttons: HTMLButtonElement[] = [];
   private readonly chips = new Map<number, HTMLButtonElement>();
-  private readonly timeEl: HTMLSpanElement;
+  private readonly timeEl: HTMLDivElement;
+  private readonly dayEl: HTMLSpanElement;
+  private readonly clockEl: HTMLSpanElement;
   private readonly fpsEl: HTMLSpanElement;
   private readonly pawnsEl: HTMLDivElement;
 
@@ -22,8 +24,13 @@ export class TopBar {
   ) {
     root.classList.add('topbar');
 
-    this.timeEl = document.createElement('span');
+    this.timeEl = document.createElement('div');
     this.timeEl.className = 'topbar__time mono';
+    this.dayEl = document.createElement('span');
+    this.dayEl.className = 'topbar__day';
+    this.clockEl = document.createElement('span');
+    this.clockEl.className = 'topbar__clock';
+    this.timeEl.append(this.dayEl, this.clockEl);
     root.append(this.timeEl);
 
     this.pawnsEl = document.createElement('div');
@@ -76,8 +83,10 @@ export class TopBar {
     this.buttons.forEach((b, i) => b.classList.toggle('active', i === index));
   }
 
-  setTime(text: string): void {
-    if (this.timeEl.textContent !== text) this.timeEl.textContent = text;
+  /** Две строки: день (сверху) и время (снизу). */
+  setTime(day: string, clock: string): void {
+    if (this.dayEl.textContent !== day) this.dayEl.textContent = day;
+    if (this.clockEl.textContent !== clock) this.clockEl.textContent = clock;
   }
 
   setFps(fps: number): void {

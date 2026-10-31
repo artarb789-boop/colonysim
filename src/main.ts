@@ -276,7 +276,7 @@ function frame(now: number): void {
   hud.update(now);
 
   const t = gameTime(world.tickCount);
-  topbar.setTime(`День ${t.day} · ${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`);
+  topbar.setTime(`День ${t.day}`, `${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`);
 
   frames++;
   if (now - fpsSince >= 500) {
