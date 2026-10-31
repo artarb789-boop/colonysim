@@ -1,0 +1,70 @@
+:root {
+  --bg: #14171a;
+  --panel: #1f2428;
+  --divider: #2c3238;
+  --text: #e8e6e1;
+  --text-dim: #a3a8ad;
+  --accent: #e8a33d;
+}
+
+.mono {
+  font-family: ui-monospace, 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  height: calc(48px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--divider);
+  color: var(--text);
+  font-size: 14px;
+  z-index: 10;
+  touch-action: manipulation;
+}
+
+.topbar__spacer {
+  flex: 1;
+}
+
+.topbar__time {
+  white-space: nowrap;
+}
+
+.topbar__fps {
+  min-width: 52px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.topbar__speeds {
+  display: flex;
+  gap: 4px;
+}
+
+.topbar__speeds button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: 600 15px ui-monospace, 'IBM Plex Mono', monospace;
+  cursor: pointer;
+}
+
+.topbar__speeds button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
