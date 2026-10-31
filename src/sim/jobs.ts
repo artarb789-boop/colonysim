@@ -10,6 +10,8 @@ import {
   FOOD_VALUE,
   MOOD,
   NEEDS,
+  SICK,
+  STROLL,
   STONE_PER_ROCK,
   WOOD_PER_TREE,
   WORK_TICKS,
@@ -19,7 +21,9 @@ import { isFood, type ItemKind } from './items';
 import { addThought } from './mood';
 import { Structure, Terrain } from './map';
 import { findPath, findPathToAny, pathCost, type Point } from './pathfinding';
-import { originOf, stepMovement, workSpeed, type Pawn, type SkillId } from './pawn';
+import { calendar, isNightHour } from './climate';
+import { isSick, originOf, stepMovement, workSpeed, type Pawn, type SkillId } from './pawn';
+import { effectsOf } from './traits';
 import type { World } from './world';
 
 /** 11 типов работ из ТЗ (в таблице приоритетов). Реализованы: растения, добыча, строительство, переноска. */
@@ -55,6 +59,7 @@ export type JobKind =
   | 'sleep'
   | 'relax'
   | 'wander'
+  | 'stroll'
   | 'goto';
 type Phase = 'move' | 'act' | 'move2' | 'act2';
 
@@ -539,6 +544,31 @@ export function planWander(world: World, pawn: Pawn): Plan {
   return stay;
 }
 
+/** Порог сна: днём «срочно» при 20, ночью раньше (по черте), больной ложится при 70. */
+function sleepThreshold(world: World, pawn: Pawn): number {
+  if (isSick(pawn, world.tickCount)) return SICK.sleepUrgent;
+  if (isNightHour(calendar(world.tickCount).hourFloat)) return effectsOf(pawn.traits).nightSleep;
+  return NEEDS.sleepUrgent;
+}
+
+/** Прогулка, когда делать нечего: случайная клетка рядом с лагерем, потом пауза. */
+export function planStroll(world: World, pawn: Pawn): Plan {
+  const o = originOf(pawn);
+  const cx = Math.floor(world.map.width / 2);
+  const cy = Math.floor(world.map.height / 2);
+  for (let i = 0; i < 8; i++) {
+    const x = o.x + world.rng.int(-STROLL.radius, STROLL.radius);
+    const y = o.y + world.rng.int(-STROLL.radius, STROLL.radius);
+    if ((x === o.x && y === o.y) || !world.map.isPassable(x, y)) continue;
+    if (Math.max(Math.abs(x - cx), Math.abs(y - cy)) > STROLL.homeRadius) continue;
+    const r = route(world, pawn, [{ x, y }]);
+    if (r) return { job: { kind: 'stroll', phase: 'move', target: { x, y }, progress: 0, duration: 0 }, path: r.path, cost: r.cost, reserve: [] };
+  }
+  const stay = planStay(pawn, 'relax');
+  stay.job.kind = 'stroll';
+  return stay;
+}
+
 /** Срочные нужды: еда, затем сон, затем отдых. */
 export function planUrgent(world: World, pawn: Pawn): Plan | null {
   const n = pawn.needs;
@@ -546,7 +576,7 @@ export function planUrgent(world: World, pawn: Pawn): Plan | null {
     const p = planEat(world, pawn);
     if (p) return p;
   }
-  if (n.sleep < NEEDS.sleepUrgent) return planSleep(world, pawn);
+  if (n.sleep < sleepThreshold(world, pawn)) return planSleep(world, pawn);
   if (n.rest < NEEDS.restUrgent) return planStay(pawn, 'relax');
   return null;
 }
@@ -696,7 +726,7 @@ function builtKindAt(world: World, idx: number): BuildKind | null {
 function arrive(world: World, pawn: Pawn, job: Job): void {
   job.progress = 0;
   const skill = skillOf(job.kind);
-  const speed = skill ? workSpeed(pawn, skill) : 1;
+  const speed = skill ? workSpeed(pawn, skill, world.tickCount) : 1;
   switch (job.kind) {
     case 'goto':
       endJob(world, pawn);
@@ -748,6 +778,10 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
     case 'wander':
       job.phase = 'act';
       job.duration = world.rng.int(MOOD.wanderPauseMin, MOOD.wanderPauseMax);
+      return;
+    case 'stroll':
+      job.phase = 'act';
+      job.duration = world.rng.int(STROLL.pauseMin, STROLL.pauseMax);
       return;
     case 'eat':
       job.phase = 'act';
@@ -836,6 +870,7 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
       else dropAtDest(world, pawn, job);
       return;
     case 'wander':
+    case 'stroll':
       endJob(world, pawn);
       return;
     default:
@@ -923,7 +958,7 @@ function actBuild(world: World, pawn: Pawn, job: Job): void {
   const idx = idxOf(world, job.target);
   const bp = world.blueprints.get(idx)!;
   if (bp.work < 1) {
-    bp.work = Math.min(1, bp.work + workSpeed(pawn, 'construction') / BUILD[bp.kind].ticks);
+    bp.work = Math.min(1, bp.work + workSpeed(pawn, 'construction', world.tickCount) / BUILD[bp.kind].ticks);
     job.progress = bp.work;
     return;
   }
@@ -935,6 +970,19 @@ function actBuild(world: World, pawn: Pawn, job: Job): void {
   }
   world.completeBlueprint(idx);
   endJob(world, pawn);
+}
+
+/** Доля выполнения текущего действия 0..1 для полосы прогресса; null — нечего показывать. */
+export function jobFraction(pawn: Pawn): number | null {
+  const j = pawn.job;
+  if (!j) return null;
+  if (j.phase === 'act' || j.phase === 'act2') {
+    if (j.kind === 'sleep') return Math.min(1, pawn.needs.sleep / NEEDS.sleepWake);
+    if (j.kind === 'relax') return Math.min(1, pawn.needs.rest / NEEDS.relaxUntil);
+    if (j.kind === 'wander' || j.kind === 'stroll') return null;
+    if (j.duration > 0) return Math.min(1, j.progress / j.duration);
+  }
+  return null;
 }
 
 /** Мысли после сна: пол, кровать, своя спальня. */
@@ -956,7 +1004,7 @@ export function endJob(world: World, pawn: Pawn): void {
 
 /** Во время работы поселенец смотрит на объект работы (если он не в той же клетке). */
 function faceWork(pawn: Pawn, job: Job): void {
-  if (job.kind === 'sleep' || job.kind === 'relax' || job.kind === 'wander') return;
+  if (job.kind === 'sleep' || job.kind === 'relax' || job.kind === 'wander' || job.kind === 'stroll') return;
   const t = job.phase === 'act2' && job.dest ? job.dest : job.target;
   if (t.x !== pawn.cx || t.y !== pawn.cy) pawn.facing = Math.atan2(t.y - pawn.cy, t.x - pawn.cx);
 }
@@ -976,7 +1024,7 @@ export function runJob(world: World, pawn: Pawn): void {
       endJob(world, pawn);
       return;
     }
-    stepMovement(pawn, world.map);
+    stepMovement(pawn, world.map, isSick(pawn, world.tickCount) ? SICK.speedFactor : 1);
     if (pawn.path.length === 0 && pawn.t === 0) arrive(world, pawn, job);
     return;
   }

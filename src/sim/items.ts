@@ -1,8 +1,8 @@
 import { DROP_SEARCH_RADIUS, STACK_MAX } from './balance';
 import type { GameMap } from './map';
 
-export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice' | 'meal';
-export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice', 'meal'];
+export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice' | 'meal' | 'silver';
+export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice', 'meal', 'silver'];
 
 /** Продукты: berries и rice — сырые, meal — готовый обед. */
 export type FoodKind = 'berries' | 'rice' | 'meal';

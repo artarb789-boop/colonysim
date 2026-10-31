@@ -10,7 +10,7 @@ const idx = (x: number, y: number) => y * MAP_SIZE + x;
 
 /** Чистая арена: трава, без кустов и предметов. */
 function arena(pawnCount = 1): World {
-  const w = new World(5, { pawnCount, startItems: false });
+  const w = new World(5, { pawnCount, startItems: false, quiet: true, fixedTemp: 20 });
   for (let y = C - 12; y <= C + 12; y++) for (let x = C - 12; x <= C + 12; x++) w.map.set(x, y, Terrain.Grass);
   w.map.bushes.clear();
   return w;
@@ -234,7 +234,10 @@ describe('огород', () => {
 describe('сохранение стройки', () => {
   it('постройки, чертежи и посевы переживают сохранение', async () => {
     const { serializeWorld, restoreWorld } = await import('../src/sim/serialize');
-    const w = arena(2);
+    // без fixedTemp: он не сохраняется, а реальный климат у копии и оригинала одинаков
+    const w = new World(5, { pawnCount: 2, startItems: false, quiet: true });
+    for (let y = C - 12; y <= C + 12; y++) for (let x = C - 12; x <= C + 12; x++) w.map.set(x, y, Terrain.Grass);
+    w.map.bushes.clear();
     w.items.put(idx(C - 4, C), 'stone', 30);
     w.items.put(idx(C - 4, C + 1), 'wood', 30);
     w.placeBlueprints('wall', cellsOf('line', C + 3, C - 2, C + 3, C + 2));

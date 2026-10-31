@@ -773,3 +773,173 @@ body.has-card .warnings {
     bottom: calc(var(--bottom) + var(--sab) + 16px);
   }
 }
+
+/* ---------- Этап 4: погода, события, диалоги ---------- */
+
+.resources__weather {
+  padding-right: 10px;
+  margin-right: 2px;
+  border-right: 1px solid var(--divider);
+  color: var(--text);
+}
+.weather--cold {
+  color: var(--blueprint);
+}
+.weather--hot {
+  color: var(--warn);
+}
+.resources__dot--silver {
+  background: #d5dae0;
+  border-radius: 50%;
+}
+
+.chip--good {
+  color: var(--good);
+  border-color: var(--good);
+}
+.chip--action {
+  pointer-events: auto;
+  min-height: 36px;
+  background: rgba(31, 36, 40, 0.96);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn--event {
+  margin-bottom: 8px;
+  border-color: var(--good);
+  color: var(--good);
+}
+.btn--accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.stranger__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.stranger__name {
+  font-size: 18px;
+  font-weight: 600;
+}
+.stranger__note {
+  margin-top: 2px;
+}
+.stranger__actions {
+  margin-top: 12px;
+}
+
+.trait {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.trait:last-child {
+  border-bottom: 0;
+}
+.trait__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.trait__desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.skillgrid__row {
+  display: grid;
+  grid-template-columns: 110px 1fr 24px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+.skillgrid__row .mono {
+  text-align: right;
+}
+
+.healthbox__ok {
+  color: var(--good);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.healthbox__sick {
+  color: var(--warn);
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.trade__info {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.trade__row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.trade__title {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.trade__stock {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.trade__btns {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+.trade__btn {
+  min-height: 36px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+.trade__btn:disabled {
+  opacity: 0.35;
+}
+.trade__btn--sell {
+  border-color: var(--good);
+}
+.trade__btn--buy {
+  border-color: var(--blueprint);
+}
+
+.journal {
+  font-size: 12px;
+}
+.journal__row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.journal__row--none {
+  color: var(--text-dim);
+}
+.journal__time {
+  flex: 0 0 52px;
+  color: var(--text-dim);
+}
+
+/* кнопки выпадающих меню ниже по высоте */
+.ctxmenu__item {
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+.orders__btn {
+  min-height: 38px;
+  font-size: 13px;
+}
+.orders__close {
+  min-width: 38px;
+}

@@ -1,5 +1,5 @@
 import type { World } from '../sim/world';
-import type { JobKind, WorkType } from '../sim/jobs';
+import { jobFraction, type JobKind, type WorkType } from '../sim/jobs';
 import type { ItemKind } from '../sim/items';
 import type { MoodKey } from '../sim/mood';
 import type { Pawn, SkillId } from '../sim/pawn';
@@ -26,7 +26,7 @@ export const WORK_HINTS: Partial<Record<WorkType, string>> = {
   hauling: 'на склад-зону',
 };
 
-export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис', meal: 'Обеды' };
+export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис', meal: 'Обеды', silver: 'Серебро' };
 
 const JOB_LABELS: Record<JobKind, string> = {
   chop: 'Рубит дерево',
@@ -40,6 +40,7 @@ const JOB_LABELS: Record<JobKind, string> = {
   deconstruct: 'Разбирает',
   cook: 'Готовит обед',
   wander: 'Срыв: бродит',
+  stroll: 'Прогуливается',
   eat: 'Ест',
   sleep: 'Спит',
   relax: 'Отдыхает',
@@ -60,9 +61,7 @@ export function jobLabel(p: Pawn): string {
 
 /** 0..1, если у задачи есть измеримый прогресс. */
 export function jobProgress(_world: World, p: Pawn): number | null {
-  const j = p.job;
-  if (!j || j.duration <= 0 || (j.phase !== 'act' && j.phase !== 'act2')) return null;
-  return Math.min(1, j.progress / j.duration);
+  return jobFraction(p);
 }
 
 export const NEED_LABELS = { food: 'Еда', sleep: 'Сон', rest: 'Отдых' } as const;
@@ -78,6 +77,12 @@ export const THOUGHT_LABELS: Record<MoodKey, string> = {
   starving: 'Страшный голод',
   tired: 'Хочет спать',
   exhausted: 'Нужен отдых',
+  cold: 'Холодно',
+  freezing: 'Лютый холод',
+  hot: 'Жарко',
+  sick: 'Болезнь',
+  optimist: 'Характер: оптимист',
+  pessimist: 'Характер: пессимист',
 };
 
 export const SKILL_LABELS: Record<SkillId, string> = {

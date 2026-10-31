@@ -1,16 +1,20 @@
 import {
   BED_SLEEP_FACTOR,
   BUILD,
+  BUSH_FROZEN_AT,
   BUSH_MAX_BERRIES,
   BUSH_REGROW_TICKS,
+  COLD_WAVE,
   CROP,
-  DAY_START_HOUR,
+  GROW,
   DAY_TICKS,
   MAP_SIZE,
   MOOD,
   NEEDS,
   PAWN_COUNT,
   START_BERRIES,
+  START_SILVER,
+  STORY,
   THINK_COOLDOWN,
 } from './balance';
 import {
@@ -27,6 +31,7 @@ import {
   planCritical,
   planGoto,
   planStepOff,
+  planStroll,
   planUrgent,
   planWander,
   planWork,
@@ -36,11 +41,14 @@ import {
   type WorkType,
 } from './jobs';
 import { GameMap, Structure, Terrain, generateMap } from './map';
+import { calendar, gameTime, growthFactor, indoorTemp, outdoorTemp, type GameTime } from './climate';
+import { initStory, tickStory, type LogEntry, type Story } from './events';
 import { addThought, computeMood, pruneThoughts } from './mood';
-import { createPawn, type Pawn } from './pawn';
+import { createPawn, isSick, type Pawn } from './pawn';
 import type { Point } from './pathfinding';
 import { Rng } from './rng';
 import { computeRooms, type RoomMap } from './rooms';
+import { effectsOf, exposureOf } from './traits';
 
 export type Designation = 'chop' | 'mine' | 'deconstruct';
 export type Order = 'chop' | 'mine' | 'zone' | 'garden' | 'deconstruct' | 'erase';
@@ -51,6 +59,12 @@ export interface WorldOptions {
   ai?: boolean;
   /** false — без стартовых ягод. */
   startItems?: boolean;
+  /** true — без случайных событий и без черт у поселенцев (для тестов). */
+  quiet?: boolean;
+  /** Фиксированная уличная температура, °C (для тестов). */
+  fixedTemp?: number;
+  /** Праздные поселенцы гуляют (по умолчанию да; в режиме quiet — нет). */
+  stroll?: boolean;
 }
 
 const PAWN_DEFS = [
@@ -81,6 +95,16 @@ export class World {
   tickCount = 0;
   /** Случайность симуляции (блуждание при срыве); состояние входит в сохранение. */
   readonly rng: Rng;
+  /** Рассказчик: ближайшее событие, холодная волна, торговец, странник. */
+  story: Story;
+  /** Журнал событий (последние STORY.logMax записей) и счётчик для уведомлений. */
+  log: LogEntry[] = [];
+  logSeq = 0;
+  private tempAt = -1;
+  private tempVal = 0;
+  private readonly fixedTemp: number | undefined;
+  /** Гуляют ли праздные поселенцы (сохраняется в файле). */
+  readonly stroll: boolean;
   private readonly ai: boolean;
   private roomCache: RoomMap | null = null;
   private readonly reservations = new Map<number, number>();
@@ -90,6 +114,8 @@ export class World {
     opts: WorldOptions = {},
   ) {
     this.ai = opts.ai ?? true;
+    this.fixedTemp = opts.fixedTemp;
+    this.stroll = opts.stroll ?? !opts.quiet;
     this.rng = new Rng(seed ^ 0x77aa);
     this.map = generateMap(seed);
     this.items = new ItemStore(this.map);
@@ -101,7 +127,15 @@ export class World {
       const [ox, oy] = START_OFFSETS[i]!;
       this.pawns.push(createPawn(i, def.name, def.color, c + ox, c + oy, rng));
     }
-    if (opts.startItems ?? true) this.items.drop('berries', START_BERRIES, c, c - 2);
+    this.story = initStory((a, b) => this.rng.int(a, b), 0);
+    if (opts.quiet) {
+      this.story.nextEventTick = Number.MAX_SAFE_INTEGER;
+      for (const p of this.pawns) p.traits = [];
+    }
+    if (opts.startItems ?? true) {
+      this.items.drop('berries', START_BERRIES, c, c - 2);
+      this.items.drop('silver', START_SILVER, c + 1, c - 2);
+    }
   }
 
   // ---------- резервирование ----------
@@ -309,6 +343,48 @@ export class World {
     this.markDirty(idx);
   }
 
+  // ---------- климат, журнал ----------
+
+  addLog(text: string): void {
+    this.log.push({ tick: this.tickCount, text });
+    if (this.log.length > STORY.logMax) this.log.shift();
+    this.logSeq++;
+  }
+
+  /** Температура на улице сейчас, °C (с поправкой на холодную волну). */
+  outdoorTemp(): number {
+    if (this.fixedTemp !== undefined) return this.fixedTemp;
+    if (this.tempAt !== this.tickCount) {
+      const wave = this.story.coldWaveUntil > this.tickCount ? COLD_WAVE.offset : 0;
+      this.tempVal = outdoorTemp(this.tickCount, this.seed, wave);
+      this.tempAt = this.tickCount;
+    }
+    return this.tempVal;
+  }
+
+  /** Температура в клетке: в комнате теплее, чем на улице. */
+  tempAtCell(idx: number): number {
+    const out = this.outdoorTemp();
+    return this.rooms().roomOf[idx]! >= 0 ? indoorTemp(out) : out;
+  }
+
+  /** Сбросить кэш температуры (после смены холодной волны). */
+  invalidateTemp(): void {
+    this.tempAt = -1;
+  }
+
+  get traderPresent(): boolean {
+    return this.story.trader !== null && this.tickCount < this.story.trader.until;
+  }
+
+  get time(): GameTime {
+    return gameTime(this.tickCount);
+  }
+
+  get season(): number {
+    return calendar(this.tickCount).season;
+  }
+
   // ---------- комнаты и запросы ----------
 
   /** Комнаты: пересчитываются лениво после любых изменений стен и дверей. */
@@ -352,6 +428,7 @@ export class World {
       berries: this.items.total('berries', inZone),
       rice: this.items.total('rice', inZone),
       meal: this.items.total('meal', inZone),
+      silver: this.items.total('silver', inZone),
     };
   }
 
@@ -364,13 +441,19 @@ export class World {
 
   tick(): void {
     this.tickCount++;
-    for (const b of this.map.bushes.values()) {
-      if (b.berries < BUSH_MAX_BERRIES && --b.regrow <= 0) {
-        b.berries++;
-        b.regrow = BUSH_REGROW_TICKS;
+    const temp = this.outdoorTemp();
+    if (temp > BUSH_FROZEN_AT) {
+      for (const b of this.map.bushes.values()) {
+        if (b.berries < BUSH_MAX_BERRIES && --b.regrow <= 0) {
+          b.berries++;
+          b.regrow = BUSH_REGROW_TICKS;
+        }
       }
     }
-    for (const c of this.map.crops.values()) if (c.growth < CROP.growTicks) c.growth++;
+    const grow = growthFactor(temp);
+    if (grow > 0) for (const c of this.map.crops.values()) if (c.growth < CROP.growTicks) c.growth = Math.min(CROP.growTicks, c.growth + grow);
+    if (temp < GROW.frostKills && this.tickCount % 100 === 0) this.frostKill();
+    tickStory(this);
     for (const p of this.pawns) {
       p.prevX = p.x;
       p.prevY = p.y;
@@ -389,21 +472,41 @@ export class World {
     const relaxing = job?.kind === 'relax' && job.phase === 'act';
     const working = job !== null && WORK_JOB_KINDS.has(job.kind);
 
-    n.food = Math.max(0, n.food - perTick(NEEDS.foodPerDay));
+    const fx = effectsOf(p.traits);
+    const sickRest = isSick(p, this.tickCount) ? 1.3 : 1;
+    n.food = Math.max(0, n.food - perTick(NEEDS.foodPerDay) * fx.foodDecay);
     const onBed = sleeping && this.map.structure[p.cy * this.map.width + p.cx] === Structure.Bed;
     n.sleep = sleeping
       ? Math.min(100, n.sleep + perTick(NEEDS.sleepRestorePerDay) * (onBed ? BED_SLEEP_FACTOR : 1))
-      : Math.max(0, n.sleep - perTick(NEEDS.sleepPerDay));
+      : Math.max(0, n.sleep - perTick(NEEDS.sleepPerDay) * fx.sleepDecay);
     if (relaxing) n.rest = Math.min(100, n.rest + perTick(NEEDS.relaxRestorePerDay));
-    else if (working) n.rest = Math.max(0, n.rest - perTick(NEEDS.restWorkPerDay));
+    else if (working) n.rest = Math.max(0, n.rest - perTick(NEEDS.restWorkPerDay) * fx.restDecay * sickRest);
     else n.rest = Math.min(100, n.rest + perTick(NEEDS.restIdlePerDay));
   }
 
   /** Пересчёт настроения; ниже порога начинается срыв. */
+  /** Заморозки гибнут незрелые посевы. */
+  private frostKill(): void {
+    let dead = 0;
+    for (const [idx, c] of this.map.crops) {
+      if (c.growth < CROP.growTicks) {
+        this.map.crops.delete(idx);
+        dead++;
+      }
+    }
+    if (dead > 0) this.addLog('Заморозки погубили молодые посевы');
+  }
+
   private updateMood(p: Pawn): void {
+    const fx = effectsOf(p.traits);
+    p.exposure = exposureOf(this.tempAtCell(p.cy * this.map.width + p.cx), fx);
+    if (p.sickUntil > 0 && !isSick(p, this.tickCount)) {
+      p.sickUntil = 0;
+      this.addLog(`Болезнь прошла — ${p.name}`);
+    }
     pruneThoughts(p, this.tickCount);
     p.mood = computeMood(p, this.tickCount);
-    if (p.breakUntil === null && p.mood < MOOD.breakBelow && this.tickCount >= p.breakCooldownUntil) {
+    if (p.breakUntil === null && p.mood < fx.breakBelow && this.tickCount >= p.breakCooldownUntil) {
       cancelJob(this, p);
       p.breakUntil = this.tickCount + this.rng.int(MOOD.breakMinTicks, MOOD.breakMaxTicks);
     }
@@ -431,7 +534,16 @@ export class World {
       }
       const plan = planStepOff(this, p) ?? planUrgent(this, p) ?? planWork(this, p);
       if (plan) startJob(this, p, plan);
+      else if (this.stroll) startJob(this, p, planStroll(this, p));
       else p.thinkCooldown = THINK_COOLDOWN;
+      return;
+    }
+    if (p.job.kind === 'stroll') {
+      // прогулку прерывает любое дело или нужда
+      if (--p.thinkCooldown > 0) return;
+      p.thinkCooldown = THINK_COOLDOWN;
+      const plan = planStepOff(this, p) ?? planUrgent(this, p) ?? planWork(this, p);
+      if (plan) startJob(this, p, plan);
       return;
     }
     if (!WORK_JOB_KINDS.has(p.job.kind)) return;
@@ -448,23 +560,5 @@ export class World {
   }
 }
 
-export interface GameTime {
-  day: number;
-  hour: number;
-  minute: number;
-}
-
-/** Игровое время по номеру тика. День 1 начинается в DAY_START_HOUR. */
-export function gameTime(tick: number): GameTime {
-  const day = Math.floor(tick / DAY_TICKS) + 1;
-  const minutesIntoDay = Math.floor(((tick % DAY_TICKS) / DAY_TICKS) * 24 * 60);
-  const total = minutesIntoDay + DAY_START_HOUR * 60;
-  const wrapped = total % (24 * 60);
-  return {
-    day: day + Math.floor(total / (24 * 60)),
-    hour: Math.floor(wrapped / 60),
-    minute: wrapped % 60,
-  };
-}
-
+export { gameTime, type GameTime };
 export { Layer };

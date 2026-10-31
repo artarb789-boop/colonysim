@@ -86,6 +86,8 @@ export const NEEDS = {
   eatTarget: 95,
   sleepWake: 90,
   relaxUntil: 60,
+  /** Ночью ложатся спать уже при таком уровне сна. */
+  sleepNight: 55,
 } as const;
 
 // ---------- Этап 3a: строительство и огород ----------
@@ -135,6 +137,9 @@ export const MOOD = {
   updateEvery: 20,
 } as const;
 
+/** Прогулка праздного поселенца: короткие переходы рядом с лагерем и паузы. */
+export const STROLL = { radius: 7, homeRadius: 14, pauseMin: 50, pauseMax: 200 } as const;
+
 /** Мысли-события: значение и сколько тиков держатся. */
 export const THOUGHTS = {
   ateMeal: { value: 10, ticks: DAY_TICKS },
@@ -146,4 +151,61 @@ export const THOUGHTS = {
 } as const;
 
 /** Мысли-состояния: действуют, пока выполняется условие по нужде. */
-export const STATE_MOODS = { hungry: -8, starving: -20, tired: -8, exhausted: -5 } as const;
+export const STATE_MOODS = {
+  hungry: -8,
+  starving: -20,
+  tired: -8,
+  exhausted: -5,
+  cold: -6,
+  freezing: -12,
+  hot: -4,
+  sick: -8,
+} as const;
+
+// ---------- Этап 4: время, климат, черты, события ----------
+
+export const SEASON_DAYS = 15;
+export const YEAR_DAYS = SEASON_DAYS * 4;
+
+/** Температура °C: годовая синусоида + суточный ход + плавный шум по дням. */
+export const CLIMATE = {
+  mean: 9,
+  amp: 18,
+  /** Сдвиг фазы (в днях): старт весны ≈ 4 °C. */
+  phase: 2.8,
+  diurnal: 4,
+  noise: 3,
+  indoorBase: 16,
+  indoorWeight: 0.6,
+} as const;
+export const COLD_WAVE = { offset: -15, days: 3 } as const;
+
+/** Рост риса по температуре: ниже minTemp не растёт, fullTemp..hotTemp — полная скорость. */
+export const GROW = { minTemp: 5, fullTemp: 20, hotTemp: 32, hotFloor: 0.5, frostKills: -3 } as const;
+/** Ягодные кусты не отрастают при температуре не выше этой. */
+export const BUSH_FROZEN_AT = 3;
+
+/** Ночь: затемнение карты до maxDarkness, пик около 01:00. */
+export const NIGHT = { start: 22, end: 6, maxDarkness: 0.55 } as const;
+
+/** Влияние температуры на поселенца под открытым небом (°C). */
+export const EXPOSURE = { coldBelow: 0, freezingBelow: -10, hotAbove: 32 } as const;
+
+export const SICK = { minTicks: DAY_TICKS * 2, maxTicks: DAY_TICKS * 3, speedFactor: 0.7, sleepUrgent: 70 } as const;
+
+/** Рассказчик: первое событие через 1.5–2.5 суток, дальше раз в 2–4 суток. */
+export const STORY = {
+  firstMin: Math.round(DAY_TICKS * 1.5),
+  firstMax: Math.round(DAY_TICKS * 2.5),
+  gapMin: DAY_TICKS * 2,
+  gapMax: DAY_TICKS * 4,
+  maxPawns: 6,
+  strangerWait: DAY_TICKS,
+  traderTicks: DAY_TICKS * 3,
+  logMax: 40,
+} as const;
+
+/** Торговля: базовая цена за штуку в серебре; продаём дешевле, покупаем дороже. */
+export const PRICES = { wood: 1, stone: 2, berries: 1, rice: 2, meal: 5 } as const;
+export const TRADE = { sellFactor: 0.6, buyFactor: 1.5, lots: [5, 20] as readonly number[] } as const;
+export const START_SILVER = 30;

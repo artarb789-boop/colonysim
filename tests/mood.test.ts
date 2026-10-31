@@ -10,7 +10,7 @@ const C = Math.floor(MAP_SIZE / 2);
 const idx = (x: number, y: number) => y * MAP_SIZE + x;
 
 function arena(pawnCount = 1): World {
-  const w = new World(5, { pawnCount, startItems: false });
+  const w = new World(5, { pawnCount, startItems: false, quiet: true, fixedTemp: 20 });
   for (let y = C - 12; y <= C + 12; y++) for (let x = C - 12; x <= C + 12; x++) w.map.set(x, y, Terrain.Grass);
   w.map.bushes.clear();
   return w;

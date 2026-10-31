@@ -1,16 +1,20 @@
-import { DEFAULT_PRIORITY } from './balance';
+import { DEFAULT_PRIORITY, STORY } from './balance';
 import type { Blueprint } from './build';
 import type { ItemStack } from './items';
+import type { LogEntry, Story } from './events';
 import { WORK_TYPES } from './jobs';
 import type { Bush, Crop } from './map';
 import type { Pawn } from './pawn';
+import { Rng } from './rng';
+import { pickTraits } from './traits';
 import { World, type Designation } from './world';
 
 /**
  * Версия формата сохранения. При изменении формата — увеличить и добавить миграцию в `migrate`.
  * 1: этап 2. 2: этап 3a (постройки, пол, огород, посевы, чертежи; ключи резервов ×8).
+ * 3: этап 4 (рассказчик, журнал; черты, болезнь, температурные состояния у поселенцев).
  */
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 export interface SaveData {
   version: number;
@@ -31,6 +35,12 @@ export interface SaveData {
   reservations: [number, number][];
   /** Состояние ГПСЧ симуляции (может отсутствовать в старых сохранениях). */
   rng?: number;
+  /** Гуляют ли праздные (может отсутствовать — тогда да). */
+  stroll?: boolean;
+  /** Рассказчик и журнал (в сохранениях версии 2 их нет). */
+  story?: Story;
+  log?: LogEntry[];
+  logSeq?: number;
   pawns: Pawn[];
 }
 
@@ -53,6 +63,10 @@ export function serializeWorld(w: World): SaveData {
       blueprints: [...w.blueprints],
       reservations: w.exportReservations(),
       rng: w.rng.getState(),
+      stroll: w.stroll,
+      story: w.story,
+      log: w.log,
+      logSeq: w.logSeq,
       pawns: w.pawns,
     }),
   ) as SaveData;
@@ -66,21 +80,27 @@ function isObj(x: unknown): x is Record<string, unknown> {
 function migrate(raw: unknown): unknown {
   if (!isObj(raw)) return null;
   if (raw.version === 1) {
-    const cells = typeof raw.cells === 'string' ? raw.cells : '';
-    const oldReservations = Array.isArray(raw.reservations) ? (raw.reservations as [number, number][]) : [];
-    return {
-      ...raw,
-      version: 2,
-      structure: '0'.repeat(cells.length),
-      floor: '0'.repeat(cells.length),
-      crops: [],
-      garden: [],
-      blueprints: [],
-      // v1: ключ = idx * 4 + слой; v2: idx * 8 + слой
-      reservations: oldReservations.map(([k, owner]) => [Math.floor(k / 4) * 8 + (k % 4), owner]),
-    };
+    return migrate({ ...migrateV1(raw) });
   }
+  if (raw.version === 2) return { ...raw, version: 3 };
   return raw.version === SAVE_VERSION ? raw : null;
+}
+
+/** v1 → v2 (дальше цепочка продолжится в migrate). */
+function migrateV1(raw: Record<string, unknown>): Record<string, unknown> {
+  const cells = typeof raw.cells === 'string' ? raw.cells : '';
+  const oldReservations = Array.isArray(raw.reservations) ? (raw.reservations as [number, number][]) : [];
+  return {
+    ...raw,
+    version: 2,
+    structure: '0'.repeat(cells.length),
+    floor: '0'.repeat(cells.length),
+    crops: [],
+    garden: [],
+    blueprints: [],
+    // v1: ключ = idx * 4 + слой; v2: idx * 8 + слой
+    reservations: oldReservations.map(([k, owner]) => [Math.floor(k / 4) * 8 + (k % 4), owner]),
+  };
 }
 
 /** Грубая проверка формы; при любом сомнении лучше не загружать, чем сломать игру. */
@@ -116,7 +136,7 @@ export function restoreWorld(data: unknown): World | null {
   }
   if (!isSaveData(migrated)) return null;
   const d = migrated;
-  const w = new World(d.seed, { pawnCount: 0, startItems: false });
+  const w = new World(d.seed, { pawnCount: 0, startItems: false, stroll: d.stroll ?? true });
   const n = w.map.cells.length;
   if (d.cells.length !== n || d.structure.length !== n || d.floor.length !== n) return null;
   for (let i = 0; i < n; i++) {
@@ -134,17 +154,33 @@ export function restoreWorld(data: unknown): World | null {
   for (const [k, v] of d.blueprints) w.blueprints.set(k, v);
   w.importReservations(d.reservations);
   for (const p of d.pawns) {
-    for (const work of WORK_TYPES) p.priorities[work] ??= DEFAULT_PRIORITY;
-    // поля, появившиеся позже формата 2
-    p.thoughts ??= [];
-    p.mood ??= 50;
-    p.breakUntil ??= null;
-    p.breakCooldownUntil ??= 0;
-    p.ownedBed ??= null;
-    p.facing ??= Math.PI / 2;
+    normalizePawn(p, d.seed);
     w.pawns.push(p);
   }
   if (typeof d.rng === 'number') w.rng.setState(d.rng);
   w.tickCount = d.tick;
+  if (d.story) {
+    w.story = d.story;
+    if (w.story.pending) normalizePawn(w.story.pending.pawn, d.seed);
+  } else {
+    // сохранение до этапа 4: первое событие — через обычный срок от текущего момента
+    w.story.nextEventTick = d.tick + w.rng.int(STORY.firstMin, STORY.firstMax);
+  }
+  w.log = d.log ?? [];
+  w.logSeq = d.logSeq ?? w.log.length;
   return w;
+}
+
+/** Поля, появившиеся позже: старым поселенцам даём значения по умолчанию (черты — детерминированно). */
+function normalizePawn(p: Pawn, seed: number): void {
+  for (const work of WORK_TYPES) p.priorities[work] ??= DEFAULT_PRIORITY;
+  p.thoughts ??= [];
+  p.mood ??= 50;
+  p.breakUntil ??= null;
+  p.breakCooldownUntil ??= 0;
+  p.ownedBed ??= null;
+  p.facing ??= Math.PI / 2;
+  p.exposure ??= 'none';
+  p.sickUntil ??= 0;
+  p.traits ??= pickTraits(new Rng((seed ^ ((p.id + 1) * 7919)) >>> 0));
 }

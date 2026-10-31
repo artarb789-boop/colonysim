@@ -2,7 +2,12 @@ import { isBuildTool, type Tool } from '../input/tools';
 import { BUILD, NEEDS } from '../sim/balance';
 import { IMPLEMENTED_WORKS, type WorkType } from '../sim/jobs';
 import type { World } from '../sim/world';
+import { DAY_TICKS, TRADE } from '../sim/balance';
+import { calendar } from '../sim/climate';
+import { acceptStranger, declineStranger } from '../sim/events';
 import { moodEntries } from '../sim/mood';
+import { TRAITS } from '../sim/traits';
+import { buy, buyPrice, canBuy, canSell, GOODS, sell, sellPrice, type Good } from '../sim/trade';
 import { SKILLS, type SkillId } from '../sim/pawn';
 import { ITEM_LABELS, NEED_LABELS, SKILL_LABELS, THOUGHT_LABELS, WORK_HINTS, WORK_LABELS, jobLabel, jobProgress, moodClass } from './labels';
 
@@ -86,6 +91,14 @@ export class Hud {
   private tool: Tool | null = null;
   private bar: 'orders' | 'build' | null = null;
   private modalRender: (() => void) | null = null;
+  /** Подпись содержимого: окно перерисовывается, только когда она изменилась. */
+  private modalSig: (() => string) | null = null;
+  private lastSig = '';
+  /** Лёгкое обновление окна без пересоздания кнопок (торговля). */
+  private modalTick: (() => void) | null = null;
+  private shownStranger = '';
+  private seenLog: number;
+  private readonly weather = el('span', 'resources__weather mono');
   private lastUpdate = 0;
 
   private readonly side = new Map<Side, HTMLButtonElement>();
@@ -109,6 +122,8 @@ export class Hud {
     bars: new Map<string, { fill: HTMLDivElement; value: HTMLSpanElement }>(),
     skills: new Map<SkillId, { fill: HTMLDivElement; value: HTMLSpanElement }>(),
     thoughts: el('div', 'thoughts'),
+    traits: el('div', 'traits'),
+    health: el('div', 'healthbox'),
   };
   private readonly modal = el('div', 'modal');
   private readonly modalTitle = el('div', 'modal__title');
@@ -125,6 +140,7 @@ export class Hud {
   ) {
     this.buildSidebar(root);
     this.buildToolbars(root);
+    this.seenLog = world.logSeq;
     this.buildResources(root);
     root.append(this.warnings);
     this.buildCard(root);
@@ -204,7 +220,8 @@ export class Hud {
   }
 
   private buildResources(root: HTMLElement): void {
-    for (const kind of ['wood', 'stone', 'berries', 'rice', 'meal'] as const) {
+    this.resources.append(this.weather);
+    for (const kind of ['wood', 'stone', 'berries', 'rice', 'meal', 'silver'] as const) {
       const item = el('div', 'resources__item');
       item.append(el('span', `resources__dot resources__dot--${kind}`), el('span', 'resources__label', ITEM_LABELS[kind]));
       const v = el('span', 'resources__value mono', '0');
@@ -258,6 +275,7 @@ export class Hud {
     c.panels.set('needs', needs);
     // навыки
     const skills = el('div', 'tabpanel');
+    skills.append(c.traits);
     for (const id of SKILLS) {
       const row = el('div', 'need');
       row.append(el('span', 'need__label need__label--wide', SKILL_LABELS[id]));
@@ -273,7 +291,7 @@ export class Hud {
     c.panels.set('skills', skills);
     // здоровье
     const health = el('div', 'tabpanel');
-    health.append(el('div', 'tabpanel__title', 'Здоров'), el('div', 'modal__note', 'Ранения и болезни появятся в следующих этапах.'));
+    health.append(c.health, el('div', 'modal__note', 'Ранения и лекарства появятся в Этапе 5.'));
     c.panels.set('health', health);
     for (const panel of c.panels.values()) body.append(panel);
     this.card.append(body);
@@ -316,11 +334,14 @@ export class Hud {
 
   // ---------- окна ----------
 
-  private open(title: string, render: (body: HTMLElement) => void): void {
+  private open(title: string, render: (body: HTMLElement) => void, sig?: () => string): void {
     this.modalRender = () => {
       this.modalBody.replaceChildren();
       render(this.modalBody);
     };
+    this.modalSig = sig ?? null;
+    this.lastSig = sig ? sig() : '';
+    this.modalTick = null;
     setText(this.modalTitle, title);
     this.modalRender();
     this.modal.hidden = false;
@@ -329,10 +350,30 @@ export class Hud {
   closeModal(): void {
     this.modal.hidden = true;
     this.modalRender = null;
+    this.modalSig = null;
+    this.modalTick = null;
   }
 
   private openColony(): void {
+    const sig = () =>
+      this.world.pawns
+        .map((p) => `${p.name}${jobLabel(p)}${Math.round(p.mood)}${Math.round(p.needs.food)}${Math.round(p.needs.sleep)}${Math.round(p.needs.rest)}`)
+        .join('|') + `#${this.world.logSeq}${this.world.story.pending ? 'p' : ''}${this.world.traderPresent ? 't' : ''}`;
     this.open('Колония', (body) => {
+      const story = this.world.story;
+      if (story.pending) {
+        const b = el('button', 'btn btn--wide btn--event', `Странник ${story.pending.pawn.name} ждёт решения`);
+        b.type = 'button';
+        b.addEventListener('click', () => this.openStranger());
+        body.append(b);
+      }
+      if (this.world.traderPresent) {
+        const days = Math.max(0, (story.trader!.until - this.world.tickCount) / DAY_TICKS);
+        const b = el('button', 'btn btn--wide btn--event', `Торговец (ещё ${days.toFixed(1)} сут.) — торговать`);
+        b.type = 'button';
+        b.addEventListener('click', () => this.openTrade());
+        body.append(b);
+      }
       for (const p of this.world.pawns) {
         const row = el('button', 'colonyrow');
         row.type = 'button';
@@ -352,7 +393,131 @@ export class Hud {
         body.append(row);
       }
       body.append(el('div', 'modal__note', 'Числа: еда · сон · отдых, затем настроение'));
+      body.append(el('div', 'tabpanel__title', 'Журнал'));
+      const log = el('div', 'journal');
+      const entries = this.world.log.slice(-12).reverse();
+      if (entries.length === 0) log.append(el('div', 'journal__row journal__row--none', 'Пока ничего не происходило'));
+      for (const e of entries) {
+        const row = el('div', 'journal__row');
+        const t = calendar(e.tick);
+        row.append(el('span', 'journal__time mono', `${t.seasonName.slice(0, 3)} ${t.dayInSeason}`), el('span', '', e.text));
+        log.append(row);
+      }
+      body.append(log);
+    }, sig);
+  }
+
+  /** Диалог странника: характеристики и решение принять или отказать. */
+  private openStranger(): void {
+    const pending = this.world.story.pending;
+    if (!pending) return;
+    const p = pending.pawn;
+    this.open('Странник', (body) => {
+      const head = el('div', 'stranger__head');
+      const av = el('span', 'avatar', p.name.charAt(0));
+      av.style.setProperty('--pawn', p.color);
+      const t = el('div');
+      const left = Math.max(0, (pending.until - this.world.tickCount) / DAY_TICKS);
+      t.append(el('div', 'stranger__name', p.name), el('div', 'modal__note stranger__note', `Просит принять в колонию. Ответить нужно за ${Math.max(1, Math.round(left * 24))} ч.`));
+      head.append(av, t);
+      body.append(head);
+
+      body.append(el('div', 'tabpanel__title', 'Черты'));
+      for (const id of p.traits) {
+        const row = el('div', 'trait');
+        row.append(el('div', 'trait__label', TRAITS[id].label), el('div', 'trait__desc', TRAITS[id].desc));
+        body.append(row);
+      }
+      body.append(el('div', 'tabpanel__title', 'Навыки'));
+      const grid = el('div', 'skillgrid');
+      for (const id of SKILLS) {
+        const row = el('div', 'skillgrid__row');
+        row.append(el('span', '', SKILL_LABELS[id]));
+        const bar = el('div', 'bar');
+        const f = el('div', 'bar__fill');
+        f.style.width = `${(p.skills[id] / 20) * 100}%`;
+        bar.append(f);
+        row.append(bar, el('span', 'mono', String(p.skills[id])));
+        grid.append(row);
+      }
+      body.append(grid);
+
+      const actions = el('div', 'pawncard__actions stranger__actions');
+      const no = el('button', 'btn', 'Отказать');
+      no.type = 'button';
+      no.addEventListener('click', () => {
+        declineStranger(this.world);
+        this.closeModal();
+      });
+      const yes = el('button', 'btn btn--accent', 'Принять');
+      yes.type = 'button';
+      yes.addEventListener('click', () => {
+        const name = p.name;
+        if (acceptStranger(this.world)) this.showToast(`${name} теперь в колонии`);
+        this.closeModal();
+      });
+      actions.append(no, yes);
+      body.append(actions);
     });
+  }
+
+  /** Торговля с торговцем: серебро и товары на складе. Кнопки не пересоздаются, только обновляются. */
+  private openTrade(): void {
+    if (!this.world.traderPresent) return;
+    this.open('Торговец', (body) => {
+      const info = el('div', 'trade__info mono');
+      body.append(info);
+      const refreshers: (() => void)[] = [];
+      for (const good of GOODS) {
+        const row = el('div', 'trade__row');
+        const title = el('div', 'trade__title');
+        const stock = el('span', 'mono trade__stock');
+        title.append(el('span', '', ITEM_LABELS[good]), stock);
+        row.append(title);
+        const btns = el('div', 'trade__btns');
+        const mk = (kind: 'sell' | 'buy', lot: number) => {
+          const b = el('button', `btn trade__btn trade__btn--${kind}`);
+          b.type = 'button';
+          b.addEventListener('click', () => {
+            if (kind === 'sell') sell(this.world, good, lot);
+            else buy(this.world, good, lot);
+            this.refreshTrade();
+          });
+          btns.append(b);
+          refreshers.push(() => {
+            const price = kind === 'sell' ? sellPrice(good, lot) : buyPrice(good, lot);
+            setText(b, kind === 'sell' ? `Продать ${lot} · +${price}` : `Купить ${lot} · −${price}`);
+            b.disabled = kind === 'sell' ? !canSell(this.world, good, lot) : !canBuy(this.world, good, lot);
+          });
+        };
+        for (const lot of TRADE.lots) mk('sell', lot);
+        for (const lot of TRADE.lots) mk('buy', lot);
+        row.append(btns);
+        body.append(row);
+        refreshers.push(() => setText(stock, `на складе: ${this.world.stockpile()[good as Good]}`));
+      }
+      body.append(el('div', 'modal__note', 'Торговля идёт через склад-зону: товар берётся и кладётся туда. Нужна склад-зона с местом.'));
+      this.tradeRefresh = () => {
+        const left = this.world.story.trader ? Math.max(0, (this.world.story.trader.until - this.world.tickCount) / DAY_TICKS) : 0;
+        setText(info, `Серебро: ${this.world.stockpile().silver} · торговец ещё ${left.toFixed(1)} сут.`);
+        for (const r of refreshers) r();
+      };
+      this.tradeRefresh();
+    });
+    this.modalTick = () => {
+      if (!this.world.traderPresent) {
+        this.closeModal();
+        this.showToast('Торговец ушёл');
+        return;
+      }
+      this.tradeRefresh?.();
+    };
+  }
+
+  private tradeRefresh: (() => void) | null = null;
+
+  private refreshTrade(): void {
+    this.tradeRefresh?.();
   }
 
   private openWorkTable(): void {
@@ -517,6 +682,9 @@ export class Hud {
     setText(this.resEls.get('berries')!, String(stock.berries));
     setText(this.resEls.get('rice')!, String(stock.rice));
     setText(this.resEls.get('meal')!, String(stock.meal));
+    setText(this.resEls.get('silver')!, String(stock.silver));
+    this.updateWeather();
+    this.updateEvents();
 
     this.updateWarnings();
 
@@ -532,6 +700,7 @@ export class Hud {
       const prog = jobProgress(this.world, p);
       c.progress.hidden = prog === null;
       if (prog !== null) (c.progress.firstElementChild as HTMLElement).style.width = `${Math.round(prog * 100)}%`;
+      this.updateTraitsAndHealth(p);
       if (this.tab === 'needs') {
         for (const key of ['food', 'sleep', 'rest'] as const) {
           const v = p.needs[key];
@@ -549,7 +718,16 @@ export class Hud {
         }
       }
     }
-    if (!this.modal.hidden && this.modalTitle.textContent === 'Колония') this.modalRender?.();
+    if (!this.modal.hidden) {
+      if (this.modalSig) {
+        const s = this.modalSig();
+        if (s !== this.lastSig) {
+          this.lastSig = s;
+          this.modalRender?.();
+        }
+      }
+      this.modalTick?.();
+    }
   }
 
   /** Три главные мысли по модулю значения. */
@@ -579,19 +757,94 @@ export class Hud {
     return this.bar === 'build';
   }
 
+  private updateWeather(): void {
+    const t = this.world.outdoorTemp();
+    const cal = calendar(this.world.tickCount);
+    setText(this.weather, `${cal.seasonName}, ${Math.round(t)}°`);
+    this.weather.className = `resources__weather mono ${t < 0 ? 'weather--cold' : t > 30 ? 'weather--hot' : ''}`;
+  }
+
+  /** Тосты о новых записях журнала и автоматическое окно странника. */
+  private updateEvents(): void {
+    if (this.world.logSeq !== this.seenLog) {
+      const last = this.world.log[this.world.log.length - 1];
+      this.seenLog = this.world.logSeq;
+      if (last) this.showToast(last.text);
+    }
+    const pending = this.world.story.pending;
+    if (!pending) {
+      this.shownStranger = '';
+    } else {
+      const key = `${pending.pawn.name}${pending.until}`;
+      if (key !== this.shownStranger && this.modal.hidden) {
+        this.shownStranger = key;
+        this.openStranger();
+      }
+    }
+  }
+
+  /** Черты и здоровье выбранного поселенца. */
+  private updateTraitsAndHealth(p: (typeof this.world.pawns)[number]): void {
+    const c = this.cardEls;
+    const key = `${p.id}:${p.traits.join(',')}`;
+    if (c.traits.dataset.key !== key) {
+      c.traits.dataset.key = key;
+      c.traits.replaceChildren(
+        el('div', 'tabpanel__title', 'Черты'),
+        ...p.traits.map((id) => {
+          const row = el('div', 'trait');
+          row.append(el('div', 'trait__label', TRAITS[id].label), el('div', 'trait__desc', TRAITS[id].desc));
+          return row;
+        }),
+        el('div', 'tabpanel__title', 'Навыки'),
+      );
+    }
+    const sick = p.sickUntil > this.world.tickCount;
+    const text = sick
+      ? `Простуда: ещё ${((p.sickUntil - this.world.tickCount) / DAY_TICKS).toFixed(1)} сут. Работает медленнее и чаще хочет спать.`
+      : 'Здоров';
+    if (c.health.dataset.key !== text) {
+      c.health.dataset.key = text;
+      c.health.replaceChildren(el('div', sick ? 'healthbox__sick' : 'healthbox__ok', text));
+    }
+  }
+
   private updateWarnings(): void {
-    const chips: { text: string; level: 'bad' | 'warn' }[] = [];
+    type Chip = { text: string; level: 'bad' | 'warn' | 'good'; action?: () => void };
+    const chips: Chip[] = [];
+    const tick = this.world.tickCount;
+    if (this.world.story.pending) chips.push({ text: `Странник ${this.world.story.pending.pawn.name} просит приюта`, level: 'good', action: () => this.openStranger() });
+    if (this.world.traderPresent) chips.push({ text: 'Прибыл торговец', level: 'good', action: () => this.openTrade() });
+    if (this.world.story.coldWaveUntil > tick) chips.push({ text: 'Холодная волна', level: 'warn' });
     for (const p of this.world.pawns) {
       if (p.needs.food <= 0) chips.push({ text: `${p.name} голодает`, level: 'bad' });
       else if (p.needs.food < NEEDS.foodUrgent) chips.push({ text: `${p.name} голоден`, level: 'warn' });
       if (p.needs.sleep <= NEEDS.sleepCritical) chips.push({ text: `${p.name} валится с ног`, level: 'bad' });
       if (p.breakUntil !== null) chips.push({ text: `${p.name} в срыве`, level: 'bad' });
       else if (p.mood < 30) chips.push({ text: `${p.name} на грани срыва`, level: 'warn' });
+      if (p.sickUntil > tick) chips.push({ text: `${p.name} болеет`, level: 'warn' });
+      if (p.exposure === 'cold' || p.exposure === 'freezing') chips.push({ text: `${p.name} мёрзнет`, level: p.exposure === 'freezing' ? 'bad' : 'warn' });
+      else if (p.exposure === 'hot') chips.push({ text: `${p.name}: жара`, level: 'warn' });
     }
     if (this.world.needsZone) chips.push({ text: 'Нет склад-зоны', level: 'warn' });
-    const key = chips.map((c) => c.level + c.text).join('|');
+    // чтобы чипы не закрывали карту: самые важные сверху, остальные сворачиваем в «ещё N»
+    const rank = { bad: 0, good: 1, warn: 2 } as const;
+    chips.sort((a, b) => rank[a.level] - rank[b.level]);
+    const MAX = 4;
+    const shown = chips.slice(0, MAX);
+    const more = chips.length - shown.length;
+    const key = shown.map((c) => c.level + c.text).join('|') + more;
     if (this.warnings.dataset.key === key) return;
     this.warnings.dataset.key = key;
-    this.warnings.replaceChildren(...chips.map((c) => el('span', `chip chip--${c.level}`, c.text)));
+    this.warnings.replaceChildren(
+      ...shown.map((c) => {
+        if (!c.action) return el('span', `chip chip--${c.level}`, c.text);
+        const b = el('button', `chip chip--${c.level} chip--action`, c.text);
+        b.type = 'button';
+        b.addEventListener('click', c.action);
+        return b;
+      }),
+      ...(more > 0 ? [el('span', 'chip', `и ещё ${more}`)] : []),
+    );
   }
 }

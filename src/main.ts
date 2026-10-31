@@ -7,6 +7,7 @@ import { clearGame, loadGame, saveGame } from './save/storage';
 import { DAY_TICKS, MAX_TICKS_PER_FRAME, SPEED_MULTIPLIERS, TICK_MS } from './sim/balance';
 import { cellsOf, shapeOf } from './sim/build';
 import { Terrain } from './sim/map';
+import { darknessAt } from './sim/climate';
 import { restoreWorld, serializeWorld } from './sim/serialize';
 import { World, gameTime } from './sim/world';
 import { Hud, type MenuItem } from './ui/hud';
@@ -242,6 +243,10 @@ const gestures = attachGestures(canvas, {
   onWheel: (sx, sy, factor) => camera.zoomAt(sx, sy, factor),
 });
 
+// Лёгкий оттенок карты по сезонам: весна и лето без оттенка, осень тёплая, зима холодная.
+const SEASON_TINT: (string | null)[] = [null, null, 'rgba(200,120,40,0.06)', 'rgba(210,225,255,0.12)'];
+let chipCount = world.pawns.length;
+
 // --- цикл: фиксированный тик + отрисовка на каждый кадр ---
 let last = performance.now();
 let acc = 0;
@@ -272,8 +277,19 @@ function frame(now: number): void {
     void save(); // автосейв раз в игровые сутки
   }
 
-  renderer.draw(world, camera, alpha, { selectedId, preview, showRooms: hud.buildOpen });
+  renderer.draw(world, camera, alpha, {
+    selectedId,
+    preview,
+    showRooms: hud.buildOpen,
+    darkness: darknessAt(world.tickCount),
+    tint: SEASON_TINT[world.season] ?? null,
+  });
   hud.update(now);
+  if (world.pawns.length !== chipCount) {
+    chipCount = world.pawns.length;
+    topbar.setPawns(world.pawns.map((p) => ({ id: p.id, name: p.name, color: p.color })));
+    topbar.setSelected(selectedId);
+  }
 
   const t = gameTime(world.tickCount);
   topbar.setTime(`День ${t.day}`, `${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`);

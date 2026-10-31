@@ -4,6 +4,8 @@ import { kindOfStructure, type BuildKind } from '../sim/build';
 import type { ItemKind } from '../sim/items';
 import { Terrain, type GameMap } from '../sim/map';
 import type { Point } from '../sim/pathfinding';
+import { jobFraction } from '../sim/jobs';
+import { hash2 } from '../sim/rng';
 import type { World } from '../sim/world';
 
 const TILE = 32; // размер клетки в офскрин-текстуре
@@ -25,13 +27,17 @@ const COLORS = {
   berry: '#D8524A',
 } as const;
 
-const ITEM_COLORS: Record<ItemKind, string> = { wood: '#9A6B43', stone: '#9A9AA0', berries: '#D8524A', rice: '#E8D9A0', meal: '#E0A458' };
+const ITEM_COLORS: Record<ItemKind, string> = { wood: '#9A6B43', stone: '#9A9AA0', berries: '#D8524A', rice: '#E8D9A0', meal: '#E0A458', silver: '#D5DAE0' };
 export interface View {
   selectedId: number | null;
   /** Область, которую сейчас рисует игрок. */
   preview: { color: string; cells: readonly Point[] } | null;
   /** Подсвечивать замкнутые комнаты. */
   showRooms: boolean;
+  /** Затемнение ночью, 0..0.55. */
+  darkness: number;
+  /** Цвет сезонного оттенка или null. */
+  tint: string | null;
 }
 
 /** Рисует постройку в квадрате со стороной s (используется и для текстуры, и для «призраков» чертежей). */
@@ -80,13 +86,118 @@ function drawStructure(ctx: CanvasRenderingContext2D, kind: BuildKind, x: number
   }
 }
 
+function isStoneAt(map: GameMap, x: number, y: number): boolean {
+  return map.inBounds(x, y) && map.get(x, y) === Terrain.Stone;
+}
+
+/** Камень с объёмом: фаски, выступающие края и случайные трещины; свет сверху-слева. */
+function paintStone(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: number): void {
+  const px = x * TILE;
+  const py = y * TILE;
+  const h = hash2(x, y, 77);
+  const tone = Math.round((h - 0.5) * 16);
+  ctx.fillStyle = `rgb(${58 + tone},${58 + tone},${61 + tone})`;
+  ctx.fillRect(px, py, TILE, TILE);
+
+  // две крупные грани: светлая сверху-слева, тёмная снизу-справа (разная диагональ у разных клеток)
+  const flip = hash2(x, y, 78) > 0.5;
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  ctx.beginPath();
+  if (flip) {
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + TILE, py);
+    ctx.lineTo(px, py + TILE);
+  } else {
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + TILE * 0.75, py);
+    ctx.lineTo(px, py + TILE * 0.75);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.beginPath();
+  ctx.moveTo(px + TILE, py + TILE);
+  ctx.lineTo(px + TILE, py + (flip ? 0 : TILE * 0.25));
+  ctx.lineTo(px + (flip ? 0 : TILE * 0.25), py + TILE);
+  ctx.closePath();
+  ctx.fill();
+
+  // трещины
+  if (hash2(x, y, 79) > 0.45) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.lineWidth = 1.2;
+    const x0 = px + TILE * (0.2 + 0.4 * hash2(x, y, 80));
+    const y0 = py + TILE * (0.2 + 0.3 * hash2(x, y, 81));
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + TILE * 0.22, y0 + TILE * 0.18);
+    ctx.lineTo(x0 + TILE * 0.18, y0 + TILE * 0.4);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.beginPath();
+    ctx.moveTo(x0 + 1.5, y0 + 1);
+    ctx.lineTo(x0 + TILE * 0.22 + 1.5, y0 + TILE * 0.18 + 1);
+    ctx.stroke();
+  }
+
+  // края, обращённые к открытой местности: светлая фаска сверху/слева, тёмная тень снизу/справа
+  const up = !isStoneAt(map, x, y - 1);
+  const left = !isStoneAt(map, x - 1, y);
+  const down = !isStoneAt(map, x, y + 1);
+  const right = !isStoneAt(map, x + 1, y);
+  if (up) {
+    ctx.fillStyle = 'rgba(255,255,255,0.26)';
+    ctx.fillRect(px, py, TILE, 4);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(px, py + 4, TILE, 3);
+  }
+  if (left) {
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fillRect(px, py, 3, TILE);
+  }
+  if (down) {
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.fillRect(px, py + TILE - 7, TILE, 7);
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(px, py + TILE - 11, TILE, 4);
+  }
+  if (right) {
+    ctx.fillStyle = 'rgba(0,0,0,0.32)';
+    ctx.fillRect(px + TILE - 5, py, 5, TILE);
+  }
+}
+
+/** Тень, которую соседний камень (сверху или слева) отбрасывает на эту клетку. */
+function paintStoneShadow(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: number): void {
+  const px = x * TILE;
+  const py = y * TILE;
+  if (isStoneAt(map, x, y - 1)) {
+    const g = ctx.createLinearGradient(0, py, 0, py + TILE * 0.45);
+    g.addColorStop(0, 'rgba(0,0,0,0.38)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(px, py, TILE, TILE * 0.45);
+  }
+  if (isStoneAt(map, x - 1, y)) {
+    const g = ctx.createLinearGradient(px, 0, px + TILE * 0.35, 0);
+    g.addColorStop(0, 'rgba(0,0,0,0.28)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(px, py, TILE * 0.35, TILE);
+  }
+}
+
 function paintCell(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: number): void {
   const t = map.get(x, y);
   const px = x * TILE;
   const py = y * TILE;
-  ctx.fillStyle =
-    t === Terrain.Dirt ? COLORS.dirt : t === Terrain.Stone ? COLORS.stone : t === Terrain.Water ? COLORS.water : COLORS.grass;
+  if (t === Terrain.Stone) {
+    paintStone(ctx, map, x, y);
+    return;
+  }
+  ctx.fillStyle = t === Terrain.Dirt ? COLORS.dirt : t === Terrain.Water ? COLORS.water : COLORS.grass;
   ctx.fillRect(px, py, TILE, TILE);
+  if (t !== Terrain.Water) paintStoneShadow(ctx, map, x, y);
   if (t === Terrain.Tree) {
     ctx.fillStyle = COLORS.tree;
     ctx.beginPath();
@@ -140,9 +251,19 @@ export class Renderer {
   /** alpha ∈ [0,1] — доля прошедшего времени до следующего тика (интерполяция). */
   draw(world: World, cam: Camera, alpha: number, view: View): void {
     const ctx = this.ctx;
-    for (const idx of world.dirty.splice(0)) {
-      const x = idx % this.map.width;
-      paintCell(this.terrainCtx, this.map, x, (idx - x) / this.map.width);
+    if (world.dirty.length > 0) {
+      // перерисовываем и соседей: у камней и теней вид зависит от окружения
+      const todo = new Set<number>();
+      for (const idx of world.dirty.splice(0)) {
+        const x = idx % this.map.width;
+        const y = (idx - x) / this.map.width;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) if (this.map.inBounds(x + dx, y + dy)) todo.add((y + dy) * this.map.width + x + dx);
+      }
+      for (const idx of todo) {
+        const x = idx % this.map.width;
+        paintCell(this.terrainCtx, this.map, x, (idx - x) / this.map.width);
+      }
     }
     const dpr = this.canvas.width / this.viewW;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -190,6 +311,14 @@ export class Renderer {
     this.drawBushes(world, cam);
     this.drawItems(world, cam);
     this.drawPawns(world, cam, alpha, view);
+    if (view.tint) {
+      ctx.fillStyle = view.tint;
+      ctx.fillRect(0, 0, this.viewW, this.viewH);
+    }
+    if (view.darkness > 0.005) {
+      ctx.fillStyle = `rgba(8,14,38,${view.darkness.toFixed(3)})`;
+      ctx.fillRect(0, 0, this.viewW, this.viewH);
+    }
     this.drawPreview(cam, view);
   }
 
@@ -295,6 +424,42 @@ export class Renderer {
     }
   }
 
+  /** Гранёный камень: светлая и тёмная грани. */
+  private drawRock(cx: number, cy: number, rad: number): void {
+    const ctx = this.ctx;
+    const pts: [number, number][] = [
+      [cx - rad, cy + rad * 0.2], [cx - rad * 0.55, cy - rad * 0.75], [cx + rad * 0.45, cy - rad * 0.9],
+      [cx + rad, cy - rad * 0.1], [cx + rad * 0.6, cy + rad * 0.8], [cx - rad * 0.4, cy + rad * 0.9],
+    ];
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+    ctx.fillStyle = '#8D8D93';
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.beginPath();
+    ctx.moveTo(pts[0]![0], pts[0]![1]);
+    ctx.lineTo(pts[1]![0], pts[1]![1]);
+    ctx.lineTo(pts[2]![0], pts[2]![1]);
+    ctx.lineTo(cx, cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
+    ctx.beginPath();
+    ctx.moveTo(pts[3]![0], pts[3]![1]);
+    ctx.lineTo(pts[4]![0], pts[4]![1]);
+    ctx.lineTo(pts[5]![0], pts[5]![1]);
+    ctx.lineTo(cx, cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+    ctx.stroke();
+  }
+
   private drawBushes(world: World, cam: Camera): void {
     const ctx = this.ctx;
     for (const [idx, b] of world.map.bushes) {
@@ -324,7 +489,19 @@ export class Renderer {
       if (!this.visible(r)) continue;
       const pad = r.s * 0.24;
       ctx.fillStyle = ITEM_COLORS[s.kind];
-      if (s.kind === 'berries' || s.kind === 'meal') {
+      if (s.kind === 'stone') {
+        this.drawRock(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.3);
+      } else if (s.kind === 'silver') {
+        ctx.beginPath();
+        ctx.arc(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.24, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#8E96A3';
+        ctx.lineWidth = Math.max(1, r.s * 0.05);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.13, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (s.kind === 'berries' || s.kind === 'meal') {
         ctx.beginPath();
         ctx.arc(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.24, 0, Math.PI * 2);
         ctx.fill();
@@ -413,6 +590,17 @@ export class Renderer {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      const frac = jobFraction(p);
+      if (frac !== null) {
+        const bw = Math.max(18, z * 0.9);
+        const bh = Math.max(3, z * 0.11);
+        const bx = ps.x - bw / 2;
+        const by = ps.y - r * 1.75 - bh;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+        ctx.fillStyle = COLORS.blueprint;
+        ctx.fillRect(bx, by, bw * frac, bh);
+      }
       if (p.carrying) {
         ctx.fillStyle = ITEM_COLORS[p.carrying.kind];
         ctx.fillRect(ps.x + r * 0.5, ps.y - r * 1.1, r * 0.7, r * 0.7);
