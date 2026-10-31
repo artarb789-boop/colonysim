@@ -2,22 +2,48 @@ import { registerSW } from 'virtual:pwa-register';
 import { attachGestures } from './input/gestures';
 import { Camera } from './render/camera';
 import { Renderer, type DrawRect } from './render/renderer';
-import { MAX_TICKS_PER_FRAME, SPEED_MULTIPLIERS, TICK_MS } from './sim/balance';
+import { clearGame, loadGame, saveGame } from './save/storage';
+import { DAY_TICKS, MAX_TICKS_PER_FRAME, SPEED_MULTIPLIERS, TICK_MS } from './sim/balance';
 import { Terrain } from './sim/map';
+import { restoreWorld, serializeWorld } from './sim/serialize';
 import { World, gameTime } from './sim/world';
 import { Hud, type OrderMode } from './ui/hud';
 import { TopBar } from './ui/topbar';
 
 registerSW({ immediate: true });
 
-// ?seed=123 — зафиксировать карту; иначе сид из времени.
+// Запуск: ?seed=123 — новая игра на этой карте; иначе продолжаем сохранённую; иначе новая со случайным сидом.
 const seedParam = Number(new URLSearchParams(location.search).get('seed'));
-const seed = Number.isInteger(seedParam) && seedParam > 0 ? seedParam : Date.now() % 1_000_000;
+const forcedSeed = Number.isInteger(seedParam) && seedParam > 0;
+if (forcedSeed) history.replaceState(null, '', location.pathname); // чтобы перезагрузка не сбрасывала игру
+
+const savedFile = forcedSeed ? null : await loadGame();
+const restored = savedFile ? restoreWorld(savedFile.sim) : null;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
-const world = new World(seed);
+const world = restored ?? new World(forcedSeed ? seedParam : Date.now() % 1_000_000);
 const camera = new Camera(world.map.width, world.map.height);
 const renderer = new Renderer(canvas, world.map);
+if (restored && savedFile) {
+  camera.zoomAt(camera.viewW / 2, camera.viewH / 2, savedFile.camera.zoom / camera.zoom);
+  camera.centerOn(savedFile.camera.x, savedFile.camera.y);
+}
+
+// --- сохранение ---
+let leaving = false;
+async function save(): Promise<boolean> {
+  if (leaving) return false;
+  return saveGame({
+    sim: serializeWorld(world),
+    camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
+    savedAt: Date.now(),
+  });
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') void save();
+});
+window.addEventListener('pagehide', () => void save());
+let lastDay = Math.floor(world.tickCount / DAY_TICKS);
 
 let selectedId: number | null = null;
 let orderMode: OrderMode | null = null;
@@ -64,8 +90,12 @@ const hud = new Hud(document.getElementById('hud') as HTMLElement, world, {
     drawFrom = null;
   },
   onPriority: (pawnId, work, value) => world.setPriority(pawnId, work, value),
+  onSave: save,
   onNewMap: () => {
-    location.search = `?seed=${1 + Math.floor(Math.random() * 999_999)}`;
+    leaving = true;
+    void clearGame().then(() => {
+      location.search = `?seed=${1 + Math.floor(Math.random() * 999_999)}`;
+    });
   },
 });
 
@@ -79,7 +109,10 @@ function resize(): void {
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', resize);
 resize();
-centerOn(0);
+if (!restored) {
+  centerOn(0);
+  void save(); // сразу создаём сохранение для новой игры
+}
 
 // --- ввод ---
 function cellAt(sx: number, sy: number): { x: number; y: number } {
@@ -202,6 +235,12 @@ function frame(now: number): void {
     }
     if (n === MAX_TICKS_PER_FRAME) acc = 0;
     alpha = acc / TICK_MS;
+  }
+
+  const day = Math.floor(world.tickCount / DAY_TICKS);
+  if (day !== lastDay) {
+    lastDay = day;
+    void save(); // автосейв раз в игровые сутки
   }
 
   renderer.draw(world, camera, alpha, { selectedId, preview });

@@ -4,6 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 // На GitHub Pages игра лежит в /colonysim/
 export default defineConfig({
   base: process.env.GITHUB_ACTIONS ? '/colonysim/' : '/',
+  build: { target: 'es2022' },
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',

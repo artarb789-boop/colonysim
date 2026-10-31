@@ -102,6 +102,15 @@ export class World {
     for (const [k, owner] of this.reservations) if (owner === pawnId) this.reservations.delete(k);
   }
 
+  exportReservations(): [number, number][] {
+    return [...this.reservations];
+  }
+
+  importReservations(list: readonly (readonly [number, number])[]): void {
+    this.reservations.clear();
+    for (const [k, owner] of list) this.reservations.set(k, owner);
+  }
+
   markDirty(idx: number): void {
     this.dirty.push(idx);
   }

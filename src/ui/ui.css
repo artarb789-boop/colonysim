@@ -380,6 +380,16 @@ body.has-card .warnings {
 .btn--wide {
   width: 100%;
 }
+.btn--gap {
+  margin-top: 8px;
+}
+.btn--danger {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.confirm {
+  margin-top: 8px;
+}
 
 /* ---------- окна ---------- */
 

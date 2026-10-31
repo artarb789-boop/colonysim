@@ -23,5 +23,8 @@
     "vitest": "^5.0.5"
   },
   "private": "true",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "idb-keyval": "^6.3.0"
+  }
 }

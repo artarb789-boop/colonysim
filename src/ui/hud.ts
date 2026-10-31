@@ -10,6 +10,7 @@ export interface HudCallbacks {
   onCenterPawn(id: number): void;
   onOrderMode(mode: OrderMode | null): void;
   onPriority(pawnId: number, work: WorkType, value: number): void;
+  onSave(): Promise<boolean>;
   onNewMap(): void;
 }
 
@@ -340,11 +341,37 @@ export class Hud {
 
   private openMore(): void {
     this.open('Ещё', (body) => {
-      body.append(el('div', 'modal__note', `Сид карты: ${this.world.seed}`));
-      const b = el('button', 'btn btn--wide', 'Новая карта');
-      b.type = 'button';
-      b.addEventListener('click', () => this.cb.onNewMap());
-      body.append(b);
+      body.append(el('div', 'modal__note', `Сид карты: ${this.world.seed}. Игра сохраняется сама: раз в сутки и при сворачивании.`));
+
+      const save = el('button', 'btn btn--wide', 'Сохранить сейчас');
+      save.type = 'button';
+      save.addEventListener('click', () => {
+        void this.cb.onSave().then((ok) => this.showToast(ok ? 'Сохранено' : 'Не удалось сохранить'));
+      });
+      body.append(save);
+
+      const fresh = el('button', 'btn btn--wide btn--gap', 'Новая карта');
+      fresh.type = 'button';
+      const confirm = el('div', 'confirm');
+      confirm.hidden = true;
+      confirm.append(el('div', 'modal__note', 'Текущая колония будет удалена. Начать заново?'));
+      const row = el('div', 'pawncard__actions');
+      const no = el('button', 'btn', 'Отмена');
+      no.type = 'button';
+      no.addEventListener('click', () => {
+        confirm.hidden = true;
+        fresh.hidden = false;
+      });
+      const yes = el('button', 'btn btn--danger', 'Начать заново');
+      yes.type = 'button';
+      yes.addEventListener('click', () => this.cb.onNewMap());
+      row.append(no, yes);
+      confirm.append(row);
+      fresh.addEventListener('click', () => {
+        fresh.hidden = true;
+        confirm.hidden = false;
+      });
+      body.append(fresh, confirm);
     });
   }
 
