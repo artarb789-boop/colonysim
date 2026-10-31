@@ -44,6 +44,26 @@ function setText(e: HTMLElement, text: string): void {
   if (e.textContent !== text) e.textContent = text;
 }
 
+const SIDE_ICONS: Record<string, string> = {
+  Колония: 'colony',
+  Работы: 'works',
+  Строить: 'build',
+  Приказы: 'orders',
+  Ещё: 'more',
+  Тревога: 'alarm',
+};
+
+/** Кнопка со значком (пиксель-арт 16×16 из Figma, public/icons) и подписью. */
+function iconButton(cls: string, label: string, icon: string): HTMLButtonElement {
+  const b = el('button', cls);
+  const img = el('img', 'icon');
+  img.src = `${import.meta.env.BASE_URL}icons/${icon}.png`;
+  img.alt = '';
+  img.draggable = false;
+  b.append(img, el('span', 'btn__label', label));
+  return b;
+}
+
 const ORDER_BUTTONS: { tool: Tool; label: string }[] = [
   { tool: 'chop', label: 'Рубить' },
   { tool: 'mine', label: 'Добывать' },
@@ -172,7 +192,7 @@ export class Hud {
   private buildSidebar(root: HTMLElement): void {
     const bar = el('nav', 'sidebar');
     for (const label of SIDE_BUTTONS) {
-      const b = el('button', 'sidebar__btn', label);
+      const b = iconButton('sidebar__btn', label, SIDE_ICONS[label] ?? 'more');
       b.type = 'button';
       b.addEventListener('click', () => this.onSide(label));
       bar.append(b);
@@ -197,7 +217,7 @@ export class Hud {
   private buildToolbars(root: HTMLElement): void {
     const fill = (bar: HTMLElement, buttons: { tool: Tool; label: string }[]) => {
       for (const { tool, label } of buttons) {
-        const b = el('button', 'orders__btn', label);
+        const b = iconButton('orders__btn', label, tool);
         b.type = 'button';
         b.addEventListener('click', () => this.setTool(this.tool === tool ? null : tool));
         bar.append(b);

@@ -1108,3 +1108,54 @@ body.has-card .warnings {
   font-size: 9.2px;
   overflow-wrap: normal;
 }
+
+/* ---------- значки кнопок (пиксель-арт 16×16, нарисованы в Figma) ---------- */
+.icon {
+  width: 24px;
+  height: 24px;
+  display: block;
+  image-rendering: pixelated;
+  pointer-events: none;
+  user-select: none;
+}
+.sidebar__btn,
+.orders__btn:not(.orders__close) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.sidebar__btn {
+  gap: 1px;
+}
+.sidebar__btn .btn__label {
+  font-size: 9.5px;
+  line-height: 1.1;
+}
+.orders__btn:not(.orders__close) {
+  min-width: 50px;
+  padding: 2px 8px;
+  gap: 0;
+}
+.orders__btn .icon {
+  width: 20px;
+  height: 20px;
+}
+.orders__btn .btn__label {
+  font-size: 10px;
+  line-height: 1.1;
+}
+/* на светлой (активной) кнопке значок темнеет, чтобы не сливаться с фоном */
+.sidebar__btn.active .icon,
+.orders__btn.active .icon {
+  filter: brightness(0.25);
+}
+@media (orientation: portrait) {
+  .sidebar__btn .icon {
+    width: 22px;
+    height: 22px;
+  }
+  .sidebar__btn .btn__label {
+    font-size: 9px;
+  }
+}
