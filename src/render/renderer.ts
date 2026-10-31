@@ -281,7 +281,7 @@ export class Renderer {
 
     // Путь и цель выбранного — цвет чертежей/прогресса.
     for (const p of world.pawns) {
-      if (view.selectedId !== p.id || p.path.length === 0) continue;
+      if (p.dead || view.selectedId !== p.id || p.path.length === 0) continue;
       const px = p.prevX + (p.x - p.prevX) * alpha;
       const py = p.prevY + (p.y - p.prevY) * alpha;
       const ps = cam.worldToScreen(px + 0.5, py + 0.5);
@@ -307,13 +307,13 @@ export class Renderer {
     }
 
     // Рисуем сверху вниз по экрану, чтобы нижние закрывали верхних.
-    const order = [...world.pawns].sort((a, b) => a.y - b.y);
+    const order = world.pawns.filter((p) => !p.buried).sort((a, b) => a.y - b.y);
     const size = z * 1.1;
     for (const p of order) {
       const px = p.prevX + (p.x - p.prevX) * alpha;
       const py = p.prevY + (p.y - p.prevY) * alpha;
       const ps = cam.worldToScreen(px + 0.5, py + 0.5);
-      const sleeping = p.job?.kind === 'sleep' && p.job.phase === 'act';
+      const sleeping = (p.job?.kind === 'sleep' && p.job.phase === 'act') || p.job?.kind === 'bedrest' || p.downed || p.dead || p.carriedBy !== null;
       const moving = p.job !== null && (p.job.phase === 'move' || p.job.phase === 'move2') && p.path.length > 0;
       const frame: Frame = moving ? (Math.floor((px + py) * 2.4) % 2 === 0 ? 'stepA' : 'stepB') : 'idle';
       const bob = moving ? Math.abs(Math.sin((px + py) * Math.PI * 2.4)) * z * 0.04 : 0;
@@ -334,8 +334,9 @@ export class Renderer {
 
       const sprite = pawnSprite(p.color, p.id, p.facing, frame);
       if (sleeping) {
-        // спящий лежит на боку
+        // спящий, раненый и погибший лежат на боку; погибший — серый
         ctx.save();
+        if (p.dead) ctx.filter = 'grayscale(1) brightness(0.65)';
         ctx.translate(ps.x, ps.y + z * 0.12);
         ctx.rotate(-Math.PI / 2);
         ctx.drawImage(sprite, -size / 2, -size * 0.55, size, size);
@@ -343,13 +344,13 @@ export class Renderer {
         ctx.font = `700 ${Math.round(z * 0.3)}px ui-monospace, monospace`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'bottom';
-        ctx.fillStyle = '#E8E6E1';
-        ctx.fillText('z', ps.x + z * 0.25, ps.y - z * 0.2);
+        ctx.fillStyle = p.dead ? '#A3A8AD' : p.downed ? '#F08A7E' : '#E8E6E1';
+        ctx.fillText(p.dead ? '†' : p.downed ? '!' : 'z', ps.x + z * 0.25, ps.y - z * 0.2);
       } else {
         ctx.drawImage(sprite, ps.x - size / 2, ps.y + z * 0.36 - size * 0.92 - bob, size, size);
       }
 
-      const frac = jobFraction(p);
+      const frac = p.dead ? null : jobFraction(p);
       if (frac !== null) {
         const bw = Math.max(18, z * 0.9);
         const bh = Math.max(3, z * 0.11);
@@ -360,7 +361,7 @@ export class Renderer {
         ctx.fillStyle = COLORS.blueprint;
         ctx.fillRect(bx, by, bw * frac, bh);
       }
-      if (p.carrying) {
+      if (p.carrying && !p.dead) {
         const s = z * 0.5;
         ctx.drawImage(itemSprite(p.carrying.kind), ps.x + z * 0.12, ps.y - z * 0.1 - bob, s, s);
       }

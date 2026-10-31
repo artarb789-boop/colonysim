@@ -13,8 +13,9 @@ import { World, type Designation } from './world';
  * Версия формата сохранения. При изменении формата — увеличить и добавить миграцию в `migrate`.
  * 1: этап 2. 2: этап 3a (постройки, пол, огород, посевы, чертежи; ключи резервов ×8).
  * 3: этап 4 (рассказчик, журнал; черты, болезнь, температурные состояния у поселенцев).
+ * 4: этап 5 (раны, кровь, смерть у поселенцев).
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 export interface SaveData {
   version: number;
@@ -82,7 +83,8 @@ function migrate(raw: unknown): unknown {
   if (raw.version === 1) {
     return migrate({ ...migrateV1(raw) });
   }
-  if (raw.version === 2) return { ...raw, version: 3 };
+  if (raw.version === 2) return migrate({ ...raw, version: 3 });
+  if (raw.version === 3) return { ...raw, version: 4 };
   return raw.version === SAVE_VERSION ? raw : null;
 }
 
@@ -182,5 +184,12 @@ function normalizePawn(p: Pawn, seed: number): void {
   p.facing ??= Math.PI / 2;
   p.exposure ??= 'none';
   p.sickUntil ??= 0;
+  p.wounds ??= [];
+  p.blood ??= 100;
+  p.downed ??= false;
+  p.dead ??= false;
+  p.deathTick ??= 0;
+  p.carriedBy ??= null;
+  p.buried ??= false;
   p.traits ??= pickTraits(new Rng((seed ^ ((p.id + 1) * 7919)) >>> 0));
 }

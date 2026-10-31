@@ -70,7 +70,7 @@ const topbar = new TopBar(
   },
 );
 topbar.setSpeed(speedIndex);
-topbar.setPawns(world.pawns.map((p) => ({ id: p.id, name: p.name, color: p.color })));
+topbar.setPawns(world.living.map((p) => ({ id: p.id, name: p.name, color: p.color })));
 
 function select(id: number | null): void {
   selectedId = id;
@@ -94,6 +94,10 @@ const hud = new Hud(document.getElementById('hud') as HTMLElement, world, {
   },
   onPriority: (pawnId, work, value) => world.setPriority(pawnId, work, value),
   onSave: save,
+  onSkip: (days) => {
+    skipLeft = days * DAY_TICKS;
+    hud.setBanner(`Перемотка: осталось ${days.toFixed(1)} сут.`);
+  },
   onNewMap: () => {
     leaving = true;
     void clearGame().then(() => {
@@ -129,6 +133,7 @@ function pawnAt(sx: number, sy: number): number | null {
   let best: number | null = null;
   let bestD = 0.8;
   for (const p of world.pawns) {
+    if (p.dead || p.carriedBy !== null) continue;
     const d = Math.hypot(p.x + 0.5 - w.x, p.y + 0.5 - w.y);
     if (d < bestD) {
       bestD = d;
@@ -245,7 +250,8 @@ const gestures = attachGestures(canvas, {
 
 // Лёгкий оттенок карты по сезонам: весна и лето без оттенка, осень тёплая, зима холодная.
 const SEASON_TINT: (string | null)[] = [null, null, 'rgba(200,120,40,0.06)', 'rgba(210,225,255,0.12)'];
-let chipCount = world.pawns.length;
+let chipSig = world.living.map((p) => p.id).join(',');
+let skipLeft = 0;
 
 // --- цикл: фиксированный тик + отрисовка на каждый кадр ---
 let last = performance.now();
@@ -259,7 +265,15 @@ function frame(now: number): void {
 
   const mult = SPEED_MULTIPLIERS[speedIndex]!;
   let alpha = 1;
-  if (mult > 0) {
+  if (skipLeft > 0) {
+    // перемотка: быстро прогоняем сутки пачками по кадрам
+    const n = Math.min(skipLeft, 1500);
+    for (let i = 0; i < n && !world.lost; i++) world.tick();
+    skipLeft = world.lost ? 0 : skipLeft - n;
+    acc = 0;
+    hud.setBanner(skipLeft > 0 ? `Перемотка: осталось ${(skipLeft / DAY_TICKS).toFixed(1)} сут.` : null);
+    if (skipLeft === 0) void save();
+  } else if (mult > 0 && !world.lost) {
     acc += dt * mult;
     let n = 0;
     while (acc >= TICK_MS && n < MAX_TICKS_PER_FRAME) {
@@ -285,9 +299,10 @@ function frame(now: number): void {
     tint: SEASON_TINT[world.season] ?? null,
   });
   hud.update(now);
-  if (world.pawns.length !== chipCount) {
-    chipCount = world.pawns.length;
-    topbar.setPawns(world.pawns.map((p) => ({ id: p.id, name: p.name, color: p.color })));
+  const sig = world.living.map((p) => p.id).join(',');
+  if (sig !== chipSig) {
+    chipSig = sig;
+    topbar.setPawns(world.living.map((p) => ({ id: p.id, name: p.name, color: p.color })));
     topbar.setSelected(selectedId);
   }
 

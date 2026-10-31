@@ -7,6 +7,8 @@ import {
   STARVING_SPEED_FACTOR,
   TICKS_PER_SECOND,
 } from './balance';
+import type { Wound } from './health';
+import { moveFactor, workFactor } from './health';
 import type { Job, WorkType } from './jobs';
 import type { Thought } from './mood';
 import { effectsOf, pickTraits, type TraitId } from './traits';
@@ -78,6 +80,16 @@ export interface Pawn {
   exposure: 'none' | 'cold' | 'freezing' | 'hot';
   /** Болеет до этого тика; 0 — здоров. */
   sickUntil: number;
+  /** Раны, кровь (100 — норма), без сознания, мёртв. */
+  wounds: Wound[];
+  blood: number;
+  downed: boolean;
+  dead: boolean;
+  deathTick: number;
+  /** Номер поселенца, который несёт этого (на кровать), иначе null. */
+  carriedBy: number | null;
+  /** Труп похоронен и убран с карты. */
+  buried: boolean;
 }
 
 export function createPawn(id: number, name: string, color: string, x: number, y: number, rng: Rng): Pawn {
@@ -113,6 +125,13 @@ export function createPawn(id: number, name: string, color: string, x: number, y
     traits: pickTraits(rng),
     exposure: 'none',
     sickUntil: 0,
+    wounds: [],
+    blood: 100,
+    downed: false,
+    dead: false,
+    deathTick: 0,
+    carriedBy: null,
+    buried: false,
   };
 }
 
@@ -120,7 +139,7 @@ export function createPawn(id: number, name: string, color: string, x: number, y
 export function workSpeed(pawn: Pawn, skill: SkillId, tick = 0): number {
   const fx = effectsOf(pawn.traits);
   const sick = isSick(pawn, tick) ? SICK.speedFactor : 1;
-  return (SKILL_BASE_SPEED + SKILL_SPEED_PER_LEVEL * pawn.skills[skill]) * fx.work * (fx.skill[skill] ?? 1) * sick;
+  return (SKILL_BASE_SPEED + SKILL_SPEED_PER_LEVEL * pawn.skills[skill]) * fx.work * (fx.skill[skill] ?? 1) * sick * workFactor(pawn);
 }
 
 export function isSick(pawn: Pawn, tick: number): boolean {
@@ -138,7 +157,7 @@ export function stepMovement(p: Pawn, map: GameMap, speedMult = 1): void {
 
   const dir = p.path[0]!;
   if (dir.x !== p.cx || dir.y !== p.cy) p.facing = Math.atan2(dir.y - p.cy, dir.x - p.cx);
-  const factor = (p.needs.food <= 0 ? STARVING_SPEED_FACTOR : 1) * effectsOf(p.traits).move * speedMult;
+  const factor = (p.needs.food <= 0 ? STARVING_SPEED_FACTOR : 1) * effectsOf(p.traits).move * speedMult * moveFactor(p);
   let budget = (PAWN_SPEED * factor) / TICKS_PER_SECOND; // «расстояние» стоимостью 1, доступное за тик
   while (budget > 0 && p.path.length > 0) {
     const next = p.path[0]!;
@@ -167,4 +186,18 @@ export function stepMovement(p: Pawn, map: GameMap, speedMult = 1): void {
     p.t = 0;
     p.target = null;
   }
+}
+
+/** Дошагать до конца текущего шага мгновенно (упавшего или поднятого нельзя оставлять между клетками). */
+export function snapToCell(p: Pawn): void {
+  const next = p.path[0];
+  if (p.t > 0 && next) {
+    p.cx = next.x;
+    p.cy = next.y;
+  }
+  p.t = 0;
+  p.x = p.cx;
+  p.y = p.cy;
+  p.path = [];
+  p.target = null;
 }

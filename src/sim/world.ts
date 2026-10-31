@@ -7,6 +7,7 @@ import {
   COLD_WAVE,
   CROP,
   GROW,
+  HEALTH,
   DAY_TICKS,
   MAP_SIZE,
   MOOD,
@@ -29,6 +30,7 @@ import {
   WORK_JOB_KINDS,
   cancelJob,
   planCritical,
+  planDowned,
   planGoto,
   planStepOff,
   planStroll,
@@ -43,8 +45,9 @@ import {
 import { GameMap, Structure, Terrain, generateMap } from './map';
 import { calendar, gameTime, growthFactor, indoorTemp, outdoorTemp, type GameTime } from './climate';
 import { initStory, tickStory, type LogEntry, type Story } from './events';
+import { addWound, consciousness, isFatal, stepHealth, type BodyPart, type WoundKind } from './health';
 import { addThought, computeMood, pruneThoughts } from './mood';
-import { createPawn, isSick, type Pawn } from './pawn';
+import { createPawn, isSick, snapToCell, type Pawn } from './pawn';
 import type { Point } from './pathfinding';
 import { Rng } from './rng';
 import { computeRooms, type RoomMap } from './rooms';
@@ -373,6 +376,16 @@ export class World {
     this.tempAt = -1;
   }
 
+  /** Живые поселенцы. */
+  get living(): Pawn[] {
+    return this.pawns.filter((p) => !p.dead);
+  }
+
+  /** Все погибли — игра проиграна. */
+  get lost(): boolean {
+    return this.pawns.length > 0 && this.pawns.every((p) => p.dead);
+  }
+
   get traderPresent(): boolean {
     return this.story.trader !== null && this.tickCount < this.story.trader.until;
   }
@@ -455,12 +468,32 @@ export class World {
     if (temp < GROW.frostKills && this.tickCount % 100 === 0) this.frostKill();
     tickStory(this);
     for (const p of this.pawns) {
+      if (p.dead) continue;
       p.prevX = p.x;
       p.prevY = p.y;
       this.updateNeeds(p);
       if ((this.tickCount + p.id) % MOOD.updateEvery === 0) this.updateMood(p);
+      if (p.wounds.length > 0 || p.blood < 100) this.healthTick(p);
+      if (p.dead) continue;
       if (this.ai) this.think(p);
       runJob(this, p);
+    }
+    // несомых упавших переносит тот, кто несёт
+    for (const p of this.pawns) {
+      if (p.carriedBy === null || p.dead) continue;
+      const c = this.pawns[p.carriedBy];
+      if (!c || c.dead) {
+        p.carriedBy = null;
+        continue;
+      }
+      p.cx = c.cx;
+      p.cy = c.cy;
+      p.x = c.x;
+      p.y = c.y;
+      p.prevX = c.prevX;
+      p.prevY = c.prevY;
+      p.t = 0;
+      p.path = [];
     }
   }
 
@@ -485,6 +518,55 @@ export class World {
   }
 
   /** Пересчёт настроения; ниже порога начинается срыв. */
+  /** Заживление, кровотечение, потеря сознания и смерть. */
+  private healthTick(p: Pawn): void {
+    const lying = p.job !== null && (p.job.kind === 'bedrest' || p.job.kind === 'sleep' || p.job.kind === 'downed');
+    const onBed = this.map.structure[p.cy * this.map.width + p.cx] === Structure.Bed;
+    stepHealth(p, lying ? (onBed ? HEALTH.bedFactor : HEALTH.floorFactor) : 1);
+    this.checkVitals(p);
+  }
+
+  /** Смерть от ран или кровопотери; падение без сознания и подъём. */
+  private checkVitals(p: Pawn): void {
+    if (isFatal(p)) {
+      this.die(p);
+      return;
+    }
+    const c = consciousness(p);
+    if (!p.downed && c < HEALTH.downBelow) {
+      p.downed = true;
+      cancelJob(this, p);
+      snapToCell(p);
+      this.addLog(`${p.name} без сознания`);
+    } else if (p.downed && c >= HEALTH.downBelow + HEALTH.getUpMargin) {
+      p.downed = false;
+    }
+  }
+
+  private die(p: Pawn): void {
+    if (p.dead) return;
+    cancelJob(this, p);
+    snapToCell(p);
+    p.dead = true;
+    p.downed = false;
+    p.deathTick = this.tickCount;
+    p.carriedBy = null;
+    p.ownedBed = null;
+    p.breakUntil = null;
+    this.addLog(`Погиб — ${p.name}`);
+    for (const q of this.pawns) if (!q.dead) addThought(q, 'colonistDied', this.tickCount);
+    this.markDirty(p.cy * this.map.width + p.cx);
+  }
+
+  /** Нанести рану (бой, отладка). Возвращает false, если поселенца нет или он мёртв. */
+  injure(pawnId: number, part: BodyPart, kind: WoundKind, damage: number): boolean {
+    const p = this.pawns[pawnId];
+    if (!p || p.dead) return false;
+    addWound(p, part, kind, damage);
+    this.checkVitals(p);
+    return true;
+  }
+
   /** Заморозки гибнут незрелые посевы. */
   private frostKill(): void {
     let dead = 0;
@@ -505,6 +587,12 @@ export class World {
       this.addLog(`Болезнь прошла — ${p.name}`);
     }
     pruneThoughts(p, this.tickCount);
+    for (const q of this.pawns) {
+      if (q.dead && !q.buried && Math.max(Math.abs(q.cx - p.cx), Math.abs(q.cy - p.cy)) <= HEALTH.corpseRadius) {
+        addThought(p, 'sawCorpse', this.tickCount);
+        break;
+      }
+    }
     p.mood = computeMood(p, this.tickCount);
     if (p.breakUntil === null && p.mood < fx.breakBelow && this.tickCount >= p.breakCooldownUntil) {
       cancelJob(this, p);
@@ -520,6 +608,10 @@ export class World {
   }
 
   private think(p: Pawn): void {
+    if (p.downed) {
+      if (p.job?.kind !== 'downed') startJob(this, p, planDowned(p));
+      return;
+    }
     if (p.breakUntil !== null) {
       if (this.tickCount >= p.breakUntil) this.endBreak(p);
       else {
@@ -550,7 +642,8 @@ export class World {
     if (--p.thinkCooldown > 0) return;
     p.thinkCooldown = THINK_COOLDOWN;
     const plan = planCritical(this, p);
-    if (plan) startJob(this, p, plan);
+    // не перезапускаем ту же задачу (иначе прогресс сбрасывался бы каждый цикл)
+    if (plan && plan.job.kind !== p.job.kind) startJob(this, p, plan);
   }
 
   /** Для отладки: сбросить задачу поселенца. */

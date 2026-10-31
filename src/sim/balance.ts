@@ -148,6 +148,8 @@ export const THOUGHTS = {
   sleptInBed: { value: 3, ticks: DAY_TICKS },
   ownBedroom: { value: 5, ticks: DAY_TICKS },
   catharsis: { value: 15, ticks: DAY_TICKS / 4 },
+  sawCorpse: { value: -8, ticks: DAY_TICKS },
+  colonistDied: { value: -10, ticks: DAY_TICKS * 2 },
 } as const;
 
 /** Мысли-состояния: действуют, пока выполняется условие по нужде. */
@@ -160,6 +162,7 @@ export const STATE_MOODS = {
   freezing: -12,
   hot: -4,
   sick: -8,
+  pain: -8,
 } as const;
 
 // ---------- Этап 4: время, климат, черты, события ----------
@@ -209,3 +212,41 @@ export const STORY = {
 export const PRICES = { wood: 1, stone: 2, berries: 1, rice: 2, meal: 5 } as const;
 export const TRADE = { sellFactor: 0.6, buyFactor: 1.5, lots: [5, 20] as readonly number[] } as const;
 export const START_SILVER = 30;
+
+// ---------- Этап 5a: здоровье, раны, лечение ----------
+
+export const HEALTH = {
+  /** Прочность частей тела: суммарный урон ранений. Голова или торс на максимуме — смерть. */
+  partMax: { head: 25, torso: 40, armL: 20, armR: 20, legL: 25, legR: 25 },
+  /** Кровотечение на единицу урона за тик (тупые удары кровоточат слабее — ×0.15). */
+  bleedPerDamage: 0.0012,
+  /** Свёртывание: множитель кровотечения за тик (без перевязки). */
+  clot: 0.9995,
+  /** Восстановление крови в тик, пока кровотечения нет. */
+  bloodRegen: 0.01,
+  /** Скорость заживления урона в тик: естественная и после перевязки (× качество). */
+  healNatural: 0.0004,
+  healTreated: 0.0012,
+  /** Множитель заживления: на кровати / лёжа на полу. */
+  bedFactor: 1.5,
+  floorFactor: 1.15,
+  /** Качество перевязки = 1 + навык медицины × это число. */
+  qualityPerSkill: 0.06,
+  painPerDamage: 1.2,
+  /** Сознание ниже этого — поселенец падает; встаёт при downBelow + getUpMargin. */
+  downBelow: 30,
+  getUpMargin: 10,
+  /** Крови меньше этого — начинается потеря сознания. */
+  bloodFaintBelow: 60,
+  treatTicks: 100,
+  rescueLiftTicks: 30,
+  rescuePlaceTicks: 20,
+  buryTicks: 90,
+  /** Поселенец ложится в постель, если суммарный урон не меньше этого или есть кровотечение. */
+  bedrestDamage: 6,
+  bedrestMaxTicks: DAY_TICKS * 3,
+  /** Радиус (клеток), в котором непохороненный труп портит настроение. */
+  corpseRadius: 7,
+  /** Боль от которой портится настроение. */
+  painMood: 30,
+} as const;

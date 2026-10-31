@@ -41,6 +41,11 @@ const JOB_LABELS: Record<JobKind, string> = {
   cook: 'Готовит обед',
   wander: 'Срыв: бродит',
   stroll: 'Прогуливается',
+  treat: 'Лечит',
+  rescue: 'Несёт раненого',
+  bury: 'Хоронит',
+  bedrest: 'Лежит в постели',
+  downed: 'Без сознания',
   eat: 'Ест',
   sleep: 'Спит',
   relax: 'Отдыхает',
@@ -83,6 +88,9 @@ export const THOUGHT_LABELS: Record<MoodKey, string> = {
   sick: 'Болезнь',
   optimist: 'Характер: оптимист',
   pessimist: 'Характер: пессимист',
+  sawCorpse: 'Видел труп',
+  colonistDied: 'Погиб товарищ',
+  pain: 'Боль',
 };
 
 export const SKILL_LABELS: Record<SkillId, string> = {

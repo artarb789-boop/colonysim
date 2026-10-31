@@ -58,7 +58,7 @@ function findSpawn(world: World): Point {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const x = c + dx;
         const y = c + dy;
-        if (world.map.isPassable(x, y) && !world.pawns.some((p) => p.cx === x && p.cy === y)) return { x, y };
+        if (world.map.isPassable(x, y) && !world.pawns.some((p) => !p.dead && p.cx === x && p.cy === y)) return { x, y };
       }
     }
   }
@@ -87,17 +87,26 @@ export function declineStranger(world: World): boolean {
   return true;
 }
 
-type EventId = 'stranger' | 'coldWave' | 'illness' | 'trader';
+export type EventId = 'stranger' | 'coldWave' | 'illness' | 'trader';
 
 function weights(world: World): [EventId, number][] {
   const season = calendar(world.tickCount).season;
-  const healthy = world.pawns.filter((p) => !isSick(p, world.tickCount));
+  const healthy = world.living.filter((p) => !isSick(p, world.tickCount));
   return [
-    ['stranger', world.pawns.length < STORY.maxPawns && !world.story.pending ? 3 : 0],
+    ['stranger', world.living.length < STORY.maxPawns && !world.story.pending ? 3 : 0],
     ['coldWave', world.story.coldWaveUntil > world.tickCount ? 0 : [1, 0, 2, 4][season]!],
     ['illness', healthy.length > 0 ? 2 : 0],
     ['trader', world.story.trader ? 0 : 2],
   ];
+}
+
+/** Запустить событие вручную (для тестирования). Возвращает false, если сейчас оно невозможно. */
+export function fireEvent(world: World, id: EventId): boolean {
+  const ok = weights(world).find(([e]) => e === id)?.[1] ?? 0;
+  const allowed = id === 'coldWave' ? world.story.coldWaveUntil <= world.tickCount : ok > 0;
+  if (!allowed) return false;
+  fire(world, id);
+  return true;
 }
 
 function fire(world: World, id: EventId): void {
@@ -115,7 +124,7 @@ function fire(world: World, id: EventId): void {
       world.addLog(`Холодная волна: ${COLD_WAVE.days} дня сильного холода`);
       return;
     case 'illness': {
-      const healthy = world.pawns.filter((p) => !isSick(p, tick));
+      const healthy = world.living.filter((p) => !isSick(p, tick));
       const p = world.rng.pick(healthy);
       p.sickUntil = tick + world.rng.int(SICK.minTicks, SICK.maxTicks);
       world.addLog(`Простуда — ${p.name}`);

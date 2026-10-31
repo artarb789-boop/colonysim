@@ -1,4 +1,5 @@
-import { MOOD, STATE_MOODS, THOUGHTS, NEEDS } from './balance';
+import { HEALTH, MOOD, STATE_MOODS, THOUGHTS, NEEDS } from './balance';
+import { pain } from './health';
 import { isSick, type Pawn } from './pawn';
 import { effectsOf } from './traits';
 
@@ -48,6 +49,7 @@ export function moodEntries(pawn: Pawn, tick: number): MoodEntry[] {
   if (n.rest < NEEDS.restUrgent) state('exhausted');
   if (pawn.exposure !== 'none') state(pawn.exposure);
   if (isSick(pawn, tick)) state('sick');
+  if (pain(pawn) >= HEALTH.painMood) state('pain');
   if (fx.mood !== 0) out.push({ key: fx.mood > 0 ? 'optimist' : 'pessimist', value: fx.mood });
   return out;
 }

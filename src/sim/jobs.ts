@@ -8,6 +8,7 @@ import {
   CROP,
   DECONSTRUCT,
   FOOD_VALUE,
+  HEALTH,
   MOOD,
   NEEDS,
   SICK,
@@ -22,7 +23,8 @@ import { addThought } from './mood';
 import { Structure, Terrain } from './map';
 import { findPath, findPathToAny, pathCost, type Point } from './pathfinding';
 import { calendar, isNightHour } from './climate';
-import { isSick, originOf, stepMovement, workSpeed, type Pawn, type SkillId } from './pawn';
+import { hasUntreated, needsBedrest, worstUntreated } from './health';
+import { isSick, originOf, snapToCell, stepMovement, workSpeed, type Pawn, type SkillId } from './pawn';
 import { effectsOf } from './traits';
 import type { World } from './world';
 
@@ -42,7 +44,7 @@ export type WorkType =
 export const WORK_TYPES: readonly WorkType[] = [
   'firefighting', 'doctor', 'cooking', 'hunting', 'construction', 'plants', 'mining', 'crafting', 'hauling', 'cleaning', 'research',
 ];
-export const IMPLEMENTED_WORKS: readonly WorkType[] = ['construction', 'cooking', 'plants', 'mining', 'hauling'];
+export const IMPLEMENTED_WORKS: readonly WorkType[] = ['construction', 'cooking', 'doctor', 'plants', 'mining', 'hauling', 'cleaning'];
 
 export type JobKind =
   | 'chop'
@@ -55,6 +57,11 @@ export type JobKind =
   | 'build'
   | 'deconstruct'
   | 'cook'
+  | 'treat'
+  | 'rescue'
+  | 'bury'
+  | 'bedrest'
+  | 'downed'
   | 'eat'
   | 'sleep'
   | 'relax'
@@ -77,10 +84,12 @@ export interface Job {
   duration: number;
   /** Сколько тиков строитель ждёт освобождения клетки. */
   wait?: number;
+  /** Номер пациента (лечение, спасение, похороны). */
+  patientId?: number;
 }
 
 /** Слои резервирования: один объект — один исполнитель. */
-export const Layer = { Designation: 0, Bush: 1, Item: 2, Dest: 3, Blueprint: 4, Crop: 5 } as const;
+export const Layer = { Designation: 0, Bush: 1, Item: 2, Dest: 3, Blueprint: 4, Crop: 5, Patient: 6 } as const;
 export type LayerId = (typeof Layer)[keyof typeof Layer];
 
 export interface Plan {
@@ -92,7 +101,7 @@ export interface Plan {
 
 /** Задачи, которые можно прервать срочной нуждой. */
 export const WORK_JOB_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
-  'chop', 'mine', 'harvest', 'sow', 'reap', 'haul', 'deliver', 'build', 'deconstruct', 'cook',
+  'chop', 'mine', 'harvest', 'sow', 'reap', 'haul', 'deliver', 'build', 'deconstruct', 'cook', 'treat', 'rescue', 'bury',
 ]);
 
 const NEIGHBORS: readonly (readonly [number, number])[] = [
@@ -415,7 +424,110 @@ function planCook(world: World, pawn: Pawn): Plan | null {
   );
 }
 
+/** Живые поселенцы, не считая самого исполнителя. */
+function others(world: World, pawn: Pawn): Pawn[] {
+  return world.pawns.filter((q) => !q.dead && q.id !== pawn.id);
+}
+
+/** Есть ли кто-то другой, способный лечить: жив, в сознании и врачебная работа у него включена. */
+function otherDoctors(world: World, pawn: Pawn): number {
+  return others(world, pawn).filter((q) => !q.downed && q.priorities.doctor > 0).length;
+}
+
+/** Лечение: врач идёт к раненому и перевязывает самую опасную рану. Себя лечит, если больше некому. */
+function planTreat(world: World, pawn: Pawn): Plan | null {
+  const alone = otherDoctors(world, pawn) === 0;
+  const patients = world.pawns.filter(
+    (q) => !q.dead && q.carriedBy === null && hasUntreated(q) && world.isFree(Layer.Patient, q.id, pawn.id) && (q.id !== pawn.id || alone),
+  );
+  return bestOf(
+    patients,
+    (q) => ({ x: q.cx, y: q.cy }),
+    originOf(pawn),
+    (q) => {
+      const target = { x: q.cx, y: q.cy };
+      const goals = q.id === pawn.id ? [target] : [...adjacentPassable(world, target), target];
+      const r = route(world, pawn, goals);
+      if (!r) return null;
+      return {
+        job: { kind: 'treat', phase: 'move', target, patientId: q.id, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Patient, q.id]],
+      };
+    },
+  );
+}
+
+/** Кровать для раненого: закреплённая или свободная ближайшая. Возвращает индекс клетки или null. */
+function bedFor(world: World, patient: Pawn): number | null {
+  if (patient.ownedBed !== null && world.map.structure[patient.ownedBed] === Structure.Bed) return patient.ownedBed;
+  const taken = new Set(world.pawns.map((p) => p.ownedBed));
+  let best: number | null = null;
+  let bestD = Infinity;
+  for (const idx of world.cellsWith(Structure.Bed)) {
+    if (taken.has(idx)) continue;
+    const p = pointOf(world, idx);
+    const d = octile(p.x - patient.cx, p.y - patient.cy);
+    if (d < bestD) {
+      bestD = d;
+      best = idx;
+    }
+  }
+  return best;
+}
+
+/** Спасение: отнести упавшего на кровать. */
+function planRescue(world: World, pawn: Pawn): Plan | null {
+  const downed = world.pawns.filter(
+    (q) => !q.dead && q.downed && q.carriedBy === null && q.id !== pawn.id && world.isFree(Layer.Patient, q.id, pawn.id) && world.map.structure[q.cy * world.map.width + q.cx] !== Structure.Bed,
+  );
+  return bestOf(
+    downed,
+    (q) => ({ x: q.cx, y: q.cy }),
+    originOf(pawn),
+    (q) => {
+      const bed = bedFor(world, q);
+      if (bed === null) return null;
+      const target = { x: q.cx, y: q.cy };
+      const dest = pointOf(world, bed);
+      if (!findPath(world.map, target.x, target.y, dest.x, dest.y)) return null;
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'rescue', phase: 'move', target, dest, patientId: q.id, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Patient, q.id]],
+      };
+    },
+  );
+}
+
+/** Похороны: отнести труп в землю (убрать с карты). */
+function planBury(world: World, pawn: Pawn): Plan | null {
+  const corpses = world.pawns.filter((q) => q.dead && !q.buried && world.isFree(Layer.Patient, q.id, pawn.id));
+  return bestOf(
+    corpses,
+    (q) => ({ x: q.cx, y: q.cy }),
+    originOf(pawn),
+    (q) => {
+      const target = { x: q.cx, y: q.cy };
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'bury', phase: 'move', target, patientId: q.id, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Patient, q.id]],
+      };
+    },
+  );
+}
+
 const PLANNERS: Partial<Record<WorkType, (world: World, pawn: Pawn) => Plan | null>> = {
+  doctor: (w, p) => cheaper(planTreat(w, p), planRescue(w, p)),
+  cleaning: planBury,
   cooking: planCook,
   plants: (w, p) => cheaper(cheaper(planDesignation(w, p, 'chop'), planHarvest(w, p)), cheaper(planReap(w, p), planSow(w, p))),
   mining: (w, p) => planDesignation(w, p, 'mine'),
@@ -486,7 +598,7 @@ export function planEat(world: World, pawn: Pawn): Plan | null {
 }
 
 /** Сон и отдых: сначала дойти до конца текущего шага, затем остаться на месте. */
-function planStay(pawn: Pawn, kind: 'sleep' | 'relax'): Plan {
+function planStay(pawn: Pawn, kind: 'sleep' | 'relax' | 'bedrest'): Plan {
   const o = originOf(pawn);
   const midStep = pawn.t > 0 && pawn.path.length > 0;
   return {
@@ -497,8 +609,29 @@ function planStay(pawn: Pawn, kind: 'sleep' | 'relax'): Plan {
   };
 }
 
+/** Раненый перевязывает себя сам, только если ему некому помочь и врачебная работа у него включена. */
+function selfTreat(world: World, pawn: Pawn): Plan | null {
+  if (!hasUntreated(pawn) || pawn.priorities.doctor <= 0 || pawn.downed || otherDoctors(world, pawn) > 0) return null;
+  return planTreat(world, pawn);
+}
+
 /** Сон: в закреплённой (или свободной) кровати, иначе на полу там, где стоит. */
 export function planSleep(world: World, pawn: Pawn): Plan {
+  return planLie(world, pawn, 'sleep');
+}
+
+/** Постельный режим раненого: та же кровать, что и для сна, но без лимита по сну. */
+export function planBedrest(world: World, pawn: Pawn): Plan {
+  return planLie(world, pawn, 'bedrest');
+}
+
+/** Упавший без сознания лежит, где упал. */
+export function planDowned(pawn: Pawn): Plan {
+  const o = originOf(pawn);
+  return { job: { kind: 'downed', phase: 'act', target: o, progress: 0, duration: 0 }, path: [], cost: 0, reserve: [] };
+}
+
+function planLie(world: World, pawn: Pawn, kind: 'sleep' | 'bedrest'): Plan {
   let bed = pawn.ownedBed;
   if (bed !== null && world.map.structure[bed] !== Structure.Bed) {
     pawn.ownedBed = null; // кровать разобрали
@@ -523,10 +656,10 @@ export function planSleep(world: World, pawn: Pawn): Plan {
     const r = route(world, pawn, [target]);
     if (r) {
       pawn.ownedBed = bed;
-      return { job: { kind: 'sleep', phase: 'move', target, progress: 0, duration: 0 }, path: r.path, cost: r.cost, reserve: [] };
+      return { job: { kind, phase: 'move', target, progress: 0, duration: 0 }, path: r.path, cost: r.cost, reserve: [] };
     }
   }
-  return planStay(pawn, 'sleep');
+  return planStay(pawn, kind);
 }
 
 /** Блуждание во время срыва: случайная клетка рядом и пауза. */
@@ -576,6 +709,9 @@ export function planUrgent(world: World, pawn: Pawn): Plan | null {
     const p = planEat(world, pawn);
     if (p) return p;
   }
+  const self = selfTreat(world, pawn);
+  if (self) return self;
+  if (needsBedrest(pawn)) return planBedrest(world, pawn);
   if (n.sleep < sleepThreshold(world, pawn)) return planSleep(world, pawn);
   if (n.rest < NEEDS.restUrgent) return planStay(pawn, 'relax');
   return null;
@@ -588,6 +724,9 @@ export function planCritical(world: World, pawn: Pawn): Plan | null {
     const p = planEat(world, pawn);
     if (p) return p;
   }
+  const self = selfTreat(world, pawn);
+  if (self) return self;
+  if (needsBedrest(pawn)) return planBedrest(world, pawn);
   if (n.sleep <= NEEDS.sleepCritical) return planSleep(world, pawn);
   return null;
 }
@@ -648,6 +787,7 @@ export function startJob(world: World, pawn: Pawn, plan: Plan): void {
 /** Снимает задачу: освобождает резервы, роняет ношу, дошагивает текущий шаг. */
 export function cancelJob(world: World, pawn: Pawn): void {
   world.releaseAll(pawn.id);
+  for (const q of world.pawns) if (q.carriedBy === pawn.id) q.carriedBy = null; // роняем несомого на месте
   if (pawn.carrying) {
     world.items.drop(pawn.carrying.kind, pawn.carrying.count, pawn.cx, pawn.cy);
     pawn.carrying = null;
@@ -658,7 +798,7 @@ export function cancelJob(world: World, pawn: Pawn): void {
   pawn.path = pawn.t > 0 && pawn.path.length > 0 ? [pawn.path[0]!] : [];
 }
 
-function stillValid(world: World, job: Job): boolean {
+function stillValid(world: World, pawn: Pawn, job: Job): boolean {
   const idx = idxOf(world, job.target);
   switch (job.kind) {
     case 'chop':
@@ -677,6 +817,22 @@ function stillValid(world: World, job: Job): boolean {
       const bp = world.blueprints.get(idx);
       return !!bp && bp.delivered >= BUILD[bp.kind].count;
     }
+    case 'treat': {
+      const q = world.pawns[job.patientId!];
+      if (!q || q.dead || !hasUntreated(q)) return false;
+      return true;
+    }
+    case 'rescue': {
+      const q = world.pawns[job.patientId!];
+      if (!q || q.dead || !q.downed) return false;
+      return job.phase === 'move' || job.phase === 'act' ? q.carriedBy === null : q.carriedBy === pawn.id;
+    }
+    case 'bury': {
+      const q = world.pawns[job.patientId!];
+      return !!q && q.dead && !q.buried;
+    }
+    case 'downed':
+      return true;
     case 'cook':
       if (world.map.structure[idxOf(world, job.dest!)] !== Structure.Stove) return false;
       if (job.phase === 'move2' || job.phase === 'act2') return true;
@@ -713,6 +869,9 @@ function skillOf(kind: JobKind): SkillId | null {
       return 'construction';
     case 'cook':
       return 'cooking';
+    case 'treat':
+    case 'rescue':
+      return 'medicine';
     default:
       return null;
   }
@@ -775,6 +934,35 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
         job.duration = job.kind === 'cook' ? COOK.ticks / speed : WORK_TICKS.drop;
       }
       return;
+    case 'treat': {
+      const q = world.pawns[job.patientId!];
+      // пациент мог уйти — тогда задачу выберем заново
+      if (!q || Math.max(Math.abs(q.cx - pawn.cx), Math.abs(q.cy - pawn.cy)) > 1) {
+        endJob(world, pawn);
+        return;
+      }
+      job.phase = 'act';
+      job.duration = HEALTH.treatTicks / speed;
+      return;
+    }
+    case 'rescue':
+      if (job.phase === 'move') {
+        job.phase = 'act';
+        job.duration = HEALTH.rescueLiftTicks;
+      } else {
+        job.phase = 'act2';
+        job.duration = HEALTH.rescuePlaceTicks;
+      }
+      return;
+    case 'bury':
+      job.phase = 'act';
+      job.duration = HEALTH.buryTicks;
+      return;
+    case 'bedrest':
+    case 'sleep':
+      job.phase = 'act';
+      job.duration = 0;
+      return;
     case 'wander':
       job.phase = 'act';
       job.duration = world.rng.int(MOOD.wanderPauseMin, MOOD.wanderPauseMax);
@@ -787,7 +975,6 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
       job.phase = 'act';
       job.duration = WORK_TICKS.eat;
       return;
-    case 'sleep':
     case 'relax':
       job.phase = 'act';
       job.duration = 0;
@@ -869,6 +1056,30 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
       if (job.phase === 'act') pickUp(world, pawn, job);
       else dropAtDest(world, pawn, job);
       return;
+    case 'treat': {
+      const q = world.pawns[job.patientId!];
+      const w = q ? worstUntreated(q) : null;
+      if (q && w) {
+        w.treated = true;
+        w.bleed = 0;
+        w.quality = 1 + pawn.skills.medicine * HEALTH.qualityPerSkill;
+      }
+      endJob(world, pawn);
+      return;
+    }
+    case 'rescue':
+      if (job.phase === 'act') liftPatient(world, pawn, job);
+      else placePatient(world, pawn, job);
+      return;
+    case 'bury': {
+      const q = world.pawns[job.patientId!];
+      if (q) {
+        q.buried = true;
+        world.addLog(`Похоронен — ${q.name}`);
+      }
+      endJob(world, pawn);
+      return;
+    }
     case 'wander':
     case 'stroll':
       endJob(world, pawn);
@@ -876,6 +1087,45 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
     default:
       return;
   }
+}
+
+/** Подхватить упавшего и идти к кровати. */
+function liftPatient(world: World, pawn: Pawn, job: Job): void {
+  const q = world.pawns[job.patientId!];
+  const dest = job.dest!;
+  if (!q || q.dead || !q.downed) {
+    endJob(world, pawn);
+    return;
+  }
+  const path = findPath(world.map, pawn.cx, pawn.cy, dest.x, dest.y);
+  if (!path) {
+    endJob(world, pawn);
+    return;
+  }
+  snapToCell(q);
+  q.carriedBy = pawn.id;
+  pawn.path = path;
+  pawn.target = dest;
+  job.phase = 'move2';
+  job.progress = 0;
+  job.duration = 0;
+}
+
+/** Уложить на кровать; кровать закрепляется за раненым. */
+function placePatient(world: World, pawn: Pawn, job: Job): void {
+  const q = world.pawns[job.patientId!];
+  const dest = job.dest!;
+  if (q && !q.dead) {
+    q.carriedBy = null;
+    q.cx = q.x = q.prevX = dest.x;
+    q.cy = q.y = q.prevY = dest.y;
+    q.t = 0;
+    q.path = [];
+    const bedIdx = idxOf(world, dest);
+    const taken = world.pawns.some((p) => p.id !== q.id && p.ownedBed === bedIdx);
+    if (!taken) q.ownedBed = bedIdx;
+  }
+  endJob(world, pawn);
 }
 
 function pickUp(world: World, pawn: Pawn, job: Job): void {
@@ -951,7 +1201,7 @@ function dropAtDest(world: World, pawn: Pawn, job: Job): void {
 
 /** Стоит ли кто-то в клетке (или входит в неё): стену туда ставить нельзя. */
 function occupied(world: World, x: number, y: number): boolean {
-  return world.pawns.some((p) => (p.cx === x && p.cy === y) || (p.path[0]?.x === x && p.path[0]?.y === y));
+  return world.pawns.some((p) => !p.dead && ((p.cx === x && p.cy === y) || (p.path[0]?.x === x && p.path[0]?.y === y)));
 }
 
 function actBuild(world: World, pawn: Pawn, job: Job): void {
@@ -979,7 +1229,7 @@ export function jobFraction(pawn: Pawn): number | null {
   if (j.phase === 'act' || j.phase === 'act2') {
     if (j.kind === 'sleep') return Math.min(1, pawn.needs.sleep / NEEDS.sleepWake);
     if (j.kind === 'relax') return Math.min(1, pawn.needs.rest / NEEDS.relaxUntil);
-    if (j.kind === 'wander' || j.kind === 'stroll') return null;
+    if (j.kind === 'wander' || j.kind === 'stroll' || j.kind === 'bedrest' || j.kind === 'downed') return null;
     if (j.duration > 0) return Math.min(1, j.progress / j.duration);
   }
   return null;
@@ -1004,7 +1254,7 @@ export function endJob(world: World, pawn: Pawn): void {
 
 /** Во время работы поселенец смотрит на объект работы (если он не в той же клетке). */
 function faceWork(pawn: Pawn, job: Job): void {
-  if (job.kind === 'sleep' || job.kind === 'relax' || job.kind === 'wander' || job.kind === 'stroll') return;
+  if (['sleep', 'relax', 'wander', 'stroll', 'bedrest', 'downed'].includes(job.kind)) return;
   const t = job.phase === 'act2' && job.dest ? job.dest : job.target;
   if (t.x !== pawn.cx || t.y !== pawn.cy) pawn.facing = Math.atan2(t.y - pawn.cy, t.x - pawn.cx);
 }
@@ -1013,7 +1263,7 @@ function faceWork(pawn: Pawn, job: Job): void {
 export function runJob(world: World, pawn: Pawn): void {
   const job = pawn.job;
   if (!job) return;
-  if (!stillValid(world, job)) {
+  if (!stillValid(world, pawn, job)) {
     endJob(world, pawn);
     return;
   }
@@ -1033,6 +1283,10 @@ export function runJob(world: World, pawn: Pawn): void {
     actBuild(world, pawn, job);
     return;
   }
+  if (job.kind === 'downed') {
+    if (!pawn.downed) endJob(world, pawn);
+    return;
+  }
 
   faceWork(pawn, job);
   job.progress++;
@@ -1043,6 +1297,8 @@ export function runJob(world: World, pawn: Pawn): void {
     }
   } else if (job.kind === 'relax') {
     if (pawn.needs.rest >= NEEDS.relaxUntil) endJob(world, pawn);
+  } else if (job.kind === 'bedrest') {
+    if (!needsBedrest(pawn) || job.progress > HEALTH.bedrestMaxTicks) endJob(world, pawn);
   } else if (job.progress >= job.duration) {
     finishAction(world, pawn, job);
   }

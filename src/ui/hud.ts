@@ -4,7 +4,8 @@ import { IMPLEMENTED_WORKS, type WorkType } from '../sim/jobs';
 import type { World } from '../sim/world';
 import { DAY_TICKS, TRADE } from '../sim/balance';
 import { calendar } from '../sim/climate';
-import { acceptStranger, declineStranger } from '../sim/events';
+import { acceptStranger, declineStranger, fireEvent, type EventId } from '../sim/events';
+import { BODY_PARTS, consciousness, pain, bleedRate, type BodyPart, type WoundKind } from '../sim/health';
 import { moodEntries } from '../sim/mood';
 import { TRAITS } from '../sim/traits';
 import { buy, buyPrice, canBuy, canSell, GOODS, sell, sellPrice, type Good } from '../sim/trade';
@@ -17,6 +18,8 @@ export interface HudCallbacks {
   onTool(tool: Tool | null): void;
   onPriority(pawnId: number, work: WorkType, value: number): void;
   onSave(): Promise<boolean>;
+  /** Перемотка времени вперёд на столько суток (для проверки). */
+  onSkip(days: number): void;
   onNewMap(): void;
 }
 
@@ -97,6 +100,8 @@ export class Hud {
   /** Лёгкое обновление окна без пересоздания кнопок (торговля). */
   private modalTick: (() => void) | null = null;
   private shownStranger = '';
+  private readonly banner = el('div', 'banner');
+  private readonly gameOver = el('div', 'gameover');
   private seenLog: number;
   private readonly weather = el('span', 'resources__weather mono');
   private lastUpdate = 0;
@@ -147,7 +152,9 @@ export class Hud {
     this.buildModal(root);
     this.menu.hidden = true;
     this.toast.hidden = true;
-    root.append(this.menu, this.toast);
+    this.banner.hidden = true;
+    this.buildGameOver();
+    root.append(this.menu, this.toast, this.banner, this.gameOver);
     document.addEventListener('pointerdown', (e) => {
       if (!this.menu.hidden && !this.menu.contains(e.target as Node)) this.hideMenu();
     }, true);
@@ -291,7 +298,7 @@ export class Hud {
     c.panels.set('skills', skills);
     // здоровье
     const health = el('div', 'tabpanel');
-    health.append(c.health, el('div', 'modal__note', 'Ранения и лекарства появятся в Этапе 5.'));
+    health.append(c.health, el('div', 'modal__note', 'Раны перевязывает врач (работа «Лечение»); пока ему нечем лечить, кроме бинтов.'));
     c.panels.set('health', health);
     for (const panel of c.panels.values()) body.append(panel);
     this.card.append(body);
@@ -357,7 +364,7 @@ export class Hud {
   private openColony(): void {
     const sig = () =>
       this.world.pawns
-        .map((p) => `${p.name}${jobLabel(p)}${Math.round(p.mood)}${Math.round(p.needs.food)}${Math.round(p.needs.sleep)}${Math.round(p.needs.rest)}`)
+        .map((p) => `${p.dead ? (p.buried ? 'B' : 'D') : ''}${p.name}${jobLabel(p)}${Math.round(p.mood)}${Math.round(p.needs.food)}${Math.round(p.needs.sleep)}${Math.round(p.needs.rest)}`)
         .join('|') + `#${this.world.logSeq}${this.world.story.pending ? 'p' : ''}${this.world.traderPresent ? 't' : ''}`;
     this.open('Колония', (body) => {
       const story = this.world.story;
@@ -374,7 +381,15 @@ export class Hud {
         b.addEventListener('click', () => this.openTrade());
         body.append(b);
       }
-      for (const p of this.world.pawns) {
+      for (const p of this.world.pawns.filter((q) => q.dead)) {
+        const row = el('div', 'colonyrow colonyrow--dead');
+        const av = el('span', 'avatar avatar--dead', '†');
+        const info = el('span', 'colonyrow__info');
+        info.append(el('span', 'colonyrow__name', p.name), el('span', 'colonyrow__task', p.buried ? 'Похоронен' : 'Погиб, не похоронен'));
+        row.append(av, info);
+        body.append(row);
+      }
+      for (const p of this.world.living) {
         const row = el('button', 'colonyrow');
         row.type = 'button';
         const av = el('span', 'avatar', p.name.charAt(0));
@@ -522,7 +537,7 @@ export class Hud {
 
   private openWorkTable(): void {
     this.open('Работы', (body) => {
-      const pawns = this.world.pawns;
+      const pawns = this.world.living;
       const works = IMPLEMENTED_WORKS;
       const portrait = this.portrait.matches;
       const table = el('table', 'worktable');
@@ -626,7 +641,50 @@ export class Hud {
         confirm.hidden = false;
       });
       body.append(fresh, confirm);
+
+      // инструменты проверки: перемотка времени, события и ранения
+      body.append(el('div', 'tabpanel__title', 'Проверка'));
+      const group = (title: string, items: [string, () => void][]) => {
+        body.append(el('div', 'modal__note', title));
+        const row = el('div', 'dbg');
+        for (const [label, fn] of items) {
+          const b = el('button', 'btn dbg__btn', label);
+          b.type = 'button';
+          b.addEventListener('click', fn);
+          row.append(b);
+        }
+        body.append(row);
+      };
+      group('Перемотка времени вперёд', [
+        ['+1 сутки', () => this.skip(1)],
+        ['+3 суток', () => this.skip(3)],
+        ['+7 суток', () => this.skip(7)],
+      ]);
+      const ev = (id: EventId, name: string): [string, () => void] => [
+        name,
+        () => this.showToast(fireEvent(this.world, id) ? `Событие: ${name}` : `Сейчас нельзя: ${name}`),
+      ];
+      group('Вызвать событие', [ev('stranger', 'Странник'), ev('trader', 'Торговец'), ev('illness', 'Болезнь'), ev('coldWave', 'Холодная волна')]);
+      const hurt = (label: string, wounds: [BodyPart, WoundKind, number][]): [string, () => void] => [
+        label,
+        () => {
+          const id = this.selectedId;
+          if (id === null) return this.showToast('Сначала выберите поселенца');
+          for (const [part, kind, dmg] of wounds) this.world.injure(id, part, kind, dmg);
+          this.showToast(`${label}: ${this.world.pawns[id]!.name}`);
+        },
+      ];
+      group('Ранить выбранного поселенца', [
+        hurt('Лёгкая', [['legL', 'cut', 5], ['armR', 'blunt', 3]]),
+        hurt('Тяжёлая', [['torso', 'cut', 14], ['legL', 'cut', 14], ['legR', 'blunt', 10]]),
+        hurt('Смертельная', [['torso', 'pierce', 45]]),
+      ]);
     });
+  }
+
+  private skip(days: number): void {
+    this.closeModal();
+    this.cb.onSkip(days);
   }
 
   // ---------- меню и сообщения ----------
@@ -647,8 +705,8 @@ export class Hud {
     this.menu.hidden = false;
     const w = this.menu.offsetWidth;
     const h = this.menu.offsetHeight;
-    this.menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
-    this.menu.style.top = `${Math.max(56, Math.min(y, window.innerHeight - h - 8))}px`;
+    this.menu.style.left = `${Math.max(7, Math.min(x, window.innerWidth - w - 7))}px`;
+    this.menu.style.top = `${Math.max(50, Math.min(y, window.innerHeight - h - 7))}px`;
   }
 
   hideMenu(): void {
@@ -687,6 +745,7 @@ export class Hud {
     this.updateEvents();
 
     this.updateWarnings();
+    this.gameOver.hidden = !this.world.lost;
 
     const p = this.selectedId === null ? null : this.world.pawns[this.selectedId];
     if (p) {
@@ -799,14 +858,79 @@ export class Hud {
         el('div', 'tabpanel__title', 'Навыки'),
       );
     }
-    const sick = p.sickUntil > this.world.tickCount;
-    const text = sick
-      ? `Простуда: ещё ${((p.sickUntil - this.world.tickCount) / DAY_TICKS).toFixed(1)} сут. Работает медленнее и чаще хочет спать.`
-      : 'Здоров';
-    if (c.health.dataset.key !== text) {
-      c.health.dataset.key = text;
-      c.health.replaceChildren(el('div', sick ? 'healthbox__sick' : 'healthbox__ok', text));
+    const tick = this.world.tickCount;
+    const hKey = [
+      p.dead, p.downed, Math.round(p.blood / 4), p.sickUntil > tick ? Math.floor((p.sickUntil - tick) / 360) : -1,
+      p.wounds.map((w) => `${w.part}${w.kind}${Math.round(w.damage * 2)}${w.treated ? 1 : 0}${w.bleed > 0.0005 ? 1 : 0}`).join(','),
+    ].join('|');
+    if (c.health.dataset.key !== hKey) {
+      c.health.dataset.key = hKey;
+      c.health.replaceChildren(...this.buildHealth(p));
     }
+  }
+
+  private vitalRow(label: string, value: number, goodHigh: boolean): HTMLElement {
+    const row = el('div', 'need');
+    row.append(el('span', 'need__label', label));
+    const bar = el('div', 'bar');
+    const f = el('div', `bar__fill ${(goodHigh ? value : 100 - value) < 35 ? 'bad' : (goodHigh ? value : 100 - value) < 65 ? 'warn' : 'good'}`);
+    f.style.width = `${Math.round(value)}%`;
+    bar.append(f);
+    row.append(bar, el('span', 'need__value mono', String(Math.round(value))));
+    return row;
+  }
+
+  /** Содержимое вкладки «Здоровье»: общее состояние, показатели и раны по частям тела. */
+  private buildHealth(p: (typeof this.world.pawns)[number]): HTMLElement[] {
+    const out: HTMLElement[] = [];
+    const tick = this.world.tickCount;
+    const sick = p.sickUntil > tick;
+    if (p.dead) {
+      out.push(el('div', 'healthbox__dead', p.buried ? 'Погиб и похоронен' : 'Погиб'));
+      return out;
+    }
+    const wounded = p.wounds.length > 0;
+    out.push(el('div', p.downed ? 'healthbox__dead' : wounded || sick ? 'healthbox__sick' : 'healthbox__ok', p.downed ? 'Без сознания' : wounded ? 'Ранен' : sick ? 'Болеет' : 'Здоров'));
+    if (wounded || p.blood < 100) {
+      out.push(this.vitalRow('Кровь', p.blood, true), this.vitalRow('Боль', pain(p), false), this.vitalRow('Сознание', consciousness(p), true));
+    }
+    if (sick) out.push(el('div', 'healthbox__sick', `Простуда: ещё ${((p.sickUntil - tick) / DAY_TICKS).toFixed(1)} сут. Работает медленнее и чаще хочет спать.`));
+    const PART: Record<BodyPart, string> = {
+      head: 'Голова', torso: 'Торс', armL: 'Левая рука', armR: 'Правая рука', legL: 'Левая нога', legR: 'Правая нога',
+    };
+    const KIND: Record<WoundKind, string> = { cut: 'порез', blunt: 'ушиб', pierce: 'прокол' };
+    for (const part of BODY_PARTS) {
+      const ws = p.wounds.filter((w) => w.part === part);
+      if (ws.length === 0) continue;
+      const box = el('div', 'wound');
+      box.append(el('div', 'wound__part', PART[part]));
+      for (const w of ws) {
+        const state = w.treated ? 'перевязана' : w.bleed > 0.0005 ? 'кровоточит' : 'не перевязана';
+        const row = el('div', `wound__row wound__row--${w.treated ? 'ok' : w.bleed > 0.0005 ? 'bad' : 'warn'}`);
+        row.append(el('span', '', `${KIND[w.kind][0]!.toUpperCase()}${KIND[w.kind].slice(1)} ${w.damage.toFixed(1)}`), el('span', '', state));
+        box.append(row);
+      }
+      out.push(box);
+    }
+    if (!wounded && !sick) out.push(el('div', 'modal__note', 'Ран нет.'));
+    return out;
+  }
+
+  /** Постоянная надпись сверху (идёт перемотка времени). */
+  setBanner(text: string | null): void {
+    this.banner.hidden = text === null;
+    if (text !== null) setText(this.banner, text);
+  }
+
+  private buildGameOver(): void {
+    this.gameOver.hidden = true;
+    const box = el('div', 'gameover__box');
+    box.append(el('div', 'gameover__title', 'Колония погибла'), el('div', 'modal__note', 'Все поселенцы мертвы. Можно начать заново на новой карте.'));
+    const b = el('button', 'btn btn--accent btn--wide', 'Новая карта');
+    b.type = 'button';
+    b.addEventListener('click', () => this.cb.onNewMap());
+    box.append(b);
+    this.gameOver.append(box);
   }
 
   private updateWarnings(): void {
@@ -816,13 +940,16 @@ export class Hud {
     if (this.world.story.pending) chips.push({ text: `Странник ${this.world.story.pending.pawn.name} просит приюта`, level: 'good', action: () => this.openStranger() });
     if (this.world.traderPresent) chips.push({ text: 'Прибыл торговец', level: 'good', action: () => this.openTrade() });
     if (this.world.story.coldWaveUntil > tick) chips.push({ text: 'Холодная волна', level: 'warn' });
-    for (const p of this.world.pawns) {
+    for (const p of this.world.living) {
       if (p.needs.food <= 0) chips.push({ text: `${p.name} голодает`, level: 'bad' });
       else if (p.needs.food < NEEDS.foodUrgent) chips.push({ text: `${p.name} голоден`, level: 'warn' });
       if (p.needs.sleep <= NEEDS.sleepCritical) chips.push({ text: `${p.name} валится с ног`, level: 'bad' });
       if (p.breakUntil !== null) chips.push({ text: `${p.name} в срыве`, level: 'bad' });
       else if (p.mood < 30) chips.push({ text: `${p.name} на грани срыва`, level: 'warn' });
       if (p.sickUntil > tick) chips.push({ text: `${p.name} болеет`, level: 'warn' });
+      if (p.downed) chips.push({ text: `${p.name} без сознания`, level: 'bad' });
+      else if (bleedRate(p) > 0.003) chips.push({ text: `${p.name} истекает кровью`, level: 'bad' });
+      else if (p.wounds.some((w) => !w.treated)) chips.push({ text: `${p.name} ранен`, level: 'warn' });
       if (p.exposure === 'cold' || p.exposure === 'freezing') chips.push({ text: `${p.name} мёрзнет`, level: p.exposure === 'freezing' ? 'bad' : 'warn' });
       else if (p.exposure === 'hot') chips.push({ text: `${p.name}: жара`, level: 'warn' });
     }
