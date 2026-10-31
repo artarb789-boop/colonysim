@@ -1,74 +1,68 @@
 /**
  * Пиксель-арт поселенца 16×16 (чистые данные, без DOM — проверяется тестами).
- * Символы: h волосы, S кожа, e глаз, b рубашка, a рукав (тёмнее), s кисть, l штаны, f ботинки, . прозрачно.
+ * Символы: o контур, h/H волосы, S/k кожа, e глаз, b/B/a куртка, s кисть, l/L штаны, t ремень, f ботинки, . прозрачно.
  */
 export type Dir = 'down' | 'up' | 'left' | 'right';
 export type Frame = 'idle' | 'stepA' | 'stepB';
 
+// Контур отделяет фигуру от земли; свет падает сверху слева.
 const HEAD_BODY: Record<'down' | 'up' | 'left', string[]> = {
   down: [
-    '................',
-    '....hhhhhhhh....',
-    '...hhhhhhhhhh...',
-    '...hhSSSSSShh...',
-    '...hSSeSSeSSh...',
-    '....SSSSSSSS....',
-    '.....SSSSSS.....',
-    '..aabbbbbbbbaa..',
-    '..abbbbbbbbbba..',
-    '..abbbbbbbbbba..',
-    '..ssbbbbbbbbss..',
+    '......ooooo.....',
+    '.....ohHHhho....',
+    '.....ohhhHhho...',
+    '.....oSSSSSko...',
+    '.....oSeSeko....',
+    '......SSSSk.....',
+    '....ooaSSaoo....',
+    '...oBbabbbao....',
+    '...oSbabbbaSo...',
+    '....oaattao.....',
   ],
   up: [
-    '................',
-    '....hhhhhhhh....',
-    '...hhhhhhhhhh...',
-    '...hhhhhhhhhh...',
-    '...hhhhhhhhhh...',
-    '....hhhhhhhh....',
-    '.....SSSSSS.....',
-    '..aabbbbbbbbaa..',
-    '..abbbbbbbbbba..',
-    '..abbbbbbbbbba..',
-    '..ssbbbbbbbbss..',
+    '......ooooo.....',
+    '.....ohHHhho....',
+    '.....ohhhhhho...',
+    '.....ohhhhho....',
+    '.....ohhhhho....',
+    '......ohho......',
+    '....ooaaaaoo....',
+    '...oBbbbbbao....',
+    '...oSbbabbaSo...',
+    '....oaattao.....',
   ],
   left: [
-    '................',
-    '....hhhhhhh.....',
-    '...hhhhhhhhh....',
-    '...hhhSSSSS.....',
-    '...hhSeSSSS.....',
-    '....hSSSSSS.....',
-    '.....SSSSS......',
-    '....aabbbbb.....',
-    '....abbbbbbb....',
-    '....abbbbbbb....',
-    '....ssbbbbb.....',
+    '......oooo......',
+    '.....ohHHho.....',
+    '....ohhhhho.....',
+    '....oSSkhho.....',
+    '...oSeSkhho.....',
+    '....oSSko.......',
+    '.....oSaoo......',
+    '....oBbbbao.....',
+    '....oBabbao.....',
+    '....oSattao.....',
   ],
 };
 
 const LEGS: Record<'front' | 'side', Record<Frame, string[]>> = {
   front: {
-    idle: ['....llllllll....', '....lll..lll....', '....lll..lll....', '....fff..fff....'],
-    stepA: ['....llllllll....', '....lll..lll....', '....lll...lll...', '....fff...fff...'],
-    stepB: ['....llllllll....', '....lll..lll....', '...lll...lll....', '...fff...fff....'],
+    idle: ['....ollLllo.....', '....ololLlo.....', '....ofo.ofo.....', '....ooo.ooo.....'],
+    stepA: ['....ollLllo.....', '....ololLlo.....', '...offo.olo.....', '...oooo.offo....'],
+    stepB: ['....ollLllo.....', '....ollolo......', '....olo.offo....', '...offo.oooo....'],
   },
   side: {
-    idle: ['....lllllll.....', '.....llll.......', '.....llll.......', '.....ffff.......'],
-    stepA: ['....lllllll.....', '....ll..lll.....', '...ll....ll.....', '...ff....ff.....'],
-    stepB: ['....lllllll.....', '.....llllll.....', '.....ll.ll......', '.....ff.ff......'],
+    idle: ['.....olllo......', '.....olLlo......', '.....offo.......', '.....oooo.......'],
+    stepA: ['.....ollllo.....', '....ollollo.....', '...offo.olo.....', '...oooo.offo....'],
+    stepB: ['.....ollllo.....', '.....ollolo.....', '.....olo.ffo....', '....offo.ooo....'],
   },
 };
 
-const pad = (row: string) => row;
-
-/** 15 строк (корпус + ноги) для направления и кадра. Правое направление — зеркало левого. */
+/** 16×16, четыре направления и три кадра; справа — зеркало левого вида. */
 export function pawnRows(dir: Dir, frame: Frame): string[] {
-  const mirrored = dir === 'right';
   const base = dir === 'right' ? 'left' : dir;
-  const legs = LEGS[base === 'left' ? 'side' : 'front'][frame];
-  const rows = [...HEAD_BODY[base], ...legs, '................'].map(pad);
-  return mirrored ? rows.map((r) => [...r].reverse().join('')) : rows;
+  const rows = ['................', ...HEAD_BODY[base], ...LEGS[base === 'left' ? 'side' : 'front'][frame], '................'];
+  return dir === 'right' ? rows.map((r) => [...r].reverse().join('')) : rows;
 }
 
 /** Направление взгляда (радианы, 0 — вправо, π/2 — вниз) → одно из четырёх. */
@@ -78,3 +72,4 @@ export function dirOf(angle: number): Dir {
   if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
   return dy >= 0 ? 'down' : 'up';
 }
+
