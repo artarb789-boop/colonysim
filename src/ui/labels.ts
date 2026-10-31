@@ -26,7 +26,7 @@ export const WORK_HINTS: Partial<Record<WorkType, string>> = {
   hauling: 'на склад-зону',
 };
 
-export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис', meal: 'Обеды', silver: 'Серебро' };
+export const ITEM_LABELS: Record<ItemKind, string> = { wood: 'Дерево', stone: 'Камень', berries: 'Ягоды', rice: 'Рис', meal: 'Обеды', silver: 'Серебро', club: 'Дубины', bow: 'Луки' };
 
 const JOB_LABELS: Record<JobKind, string> = {
   chop: 'Рубит дерево',
@@ -41,6 +41,8 @@ const JOB_LABELS: Record<JobKind, string> = {
   cook: 'Готовит обед',
   wander: 'Срыв: бродит',
   stroll: 'Прогуливается',
+  equip: 'Берёт оружие',
+  fight: 'Сражается',
   treat: 'Лечит',
   rescue: 'Несёт раненого',
   bury: 'Хоронит',

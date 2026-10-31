@@ -1,8 +1,14 @@
 import { DROP_SEARCH_RADIUS, STACK_MAX } from './balance';
 import type { GameMap } from './map';
 
-export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice' | 'meal' | 'silver';
-export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice', 'meal', 'silver'];
+export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice' | 'meal' | 'silver' | 'club' | 'bow';
+export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice', 'meal', 'silver', 'club', 'bow'];
+
+/** Оружие, которое можно взять в руки. */
+export type WeaponItem = 'club' | 'bow';
+export function isWeapon(kind: ItemKind): kind is WeaponItem {
+  return kind === 'club' || kind === 'bow';
+}
 
 /** Продукты: berries и rice — сырые, meal — готовый обед. */
 export type FoodKind = 'berries' | 'rice' | 'meal';

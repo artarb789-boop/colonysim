@@ -5,6 +5,7 @@ import {
   BUSH_MAX_BERRIES,
   BUSH_REGROW_TICKS,
   COLD_WAVE,
+  COMBAT,
   CROP,
   GROW,
   HEALTH,
@@ -45,6 +46,7 @@ import {
 import { GameMap, Structure, Terrain, generateMap } from './map';
 import { calendar, gameTime, growthFactor, indoorTemp, outdoorTemp, type GameTime } from './climate';
 import { initStory, tickStory, type LogEntry, type Story } from './events';
+import { tickEnemies, type Fx } from './raid';
 import { addWound, consciousness, isFatal, stepHealth, type BodyPart, type WoundKind } from './health';
 import { addThought, computeMood, pruneThoughts } from './mood';
 import { createPawn, isSick, snapToCell, type Pawn } from './pawn';
@@ -100,6 +102,14 @@ export class World {
   readonly rng: Rng;
   /** Рассказчик: ближайшее событие, холодная волна, торговец, странник. */
   story: Story;
+  /** Налётчики на карте (не входят в pawns: у них своё поведение). */
+  enemies: Pawn[] = [];
+  nextEnemyId = 0;
+  /** Тревога: колонисты берут оружие и дерутся; alarmAuto — включена набегом, выключится сама. */
+  alarm = false;
+  alarmAuto = false;
+  /** Эффекты ударов и выстрелов для отрисовки (не сохраняются). */
+  fx: Fx[] = [];
   /** Журнал событий (последние STORY.logMax записей) и счётчик для уведомлений. */
   log: LogEntry[] = [];
   logSeq = 0;
@@ -138,6 +148,7 @@ export class World {
     if (opts.startItems ?? true) {
       this.items.drop('berries', START_BERRIES, c, c - 2);
       this.items.drop('silver', START_SILVER, c + 1, c - 2);
+      this.items.drop('club', COMBAT.startClubs, c - 2, c - 2);
     }
   }
 
@@ -442,7 +453,19 @@ export class World {
       rice: this.items.total('rice', inZone),
       meal: this.items.total('meal', inZone),
       silver: this.items.total('silver', inZone),
+      club: this.items.total('club', inZone),
+      bow: this.items.total('bow', inZone),
     };
+  }
+
+  /** Включить или выключить тревогу вручную. */
+  setAlarm(on: boolean): void {
+    this.alarm = on;
+    this.alarmAuto = false;
+  }
+
+  addFx(kind: Fx['kind'], a: Pawn, t: Pawn, hit: boolean): void {
+    this.fx.push({ kind, x0: a.x + 0.5, y0: a.y + 0.5, x1: t.x + 0.5, y1: t.y + 0.5, hit, until: this.tickCount + COMBAT.fxTicks });
   }
 
   /** Есть предметы вне склада, а склада нет совсем. */
@@ -473,11 +496,15 @@ export class World {
       p.prevY = p.y;
       this.updateNeeds(p);
       if ((this.tickCount + p.id) % MOOD.updateEvery === 0) this.updateMood(p);
+      if (p.attackCooldown > 0) p.attackCooldown--;
       if (p.wounds.length > 0 || p.blood < 100) this.healthTick(p);
       if (p.dead) continue;
       if (this.ai) this.think(p);
       runJob(this, p);
     }
+    for (const e of this.enemies) if (!e.dead && (e.wounds.length > 0 || e.blood < 100)) this.healthTick(e);
+    tickEnemies(this);
+    if (this.fx.length > 0) this.fx = this.fx.filter((f) => f.until > this.tickCount);
     // несомых упавших переносит тот, кто несёт
     for (const p of this.pawns) {
       if (p.carriedBy === null || p.dead) continue;
@@ -537,7 +564,7 @@ export class World {
       p.downed = true;
       cancelJob(this, p);
       snapToCell(p);
-      this.addLog(`${p.name} без сознания`);
+      if (p.faction === 'colony') this.addLog(`${p.name} без сознания`);
     } else if (p.downed && c >= HEALTH.downBelow + HEALTH.getUpMargin) {
       p.downed = false;
     }
@@ -553,8 +580,16 @@ export class World {
     p.carriedBy = null;
     p.ownedBed = null;
     p.breakUntil = null;
-    this.addLog(`Погиб — ${p.name}`);
-    for (const q of this.pawns) if (!q.dead) addThought(q, 'colonistDied', this.tickCount);
+    if (p.weapon) {
+      this.items.drop(p.weapon, 1, p.cx, p.cy);
+      p.weapon = null;
+    }
+    if (p.faction === 'raider') {
+      this.addLog(`Налётчик пал — ${p.name}`);
+    } else {
+      this.addLog(`Погиб — ${p.name}`);
+      for (const q of this.pawns) if (!q.dead) addThought(q, 'colonistDied', this.tickCount);
+    }
     this.markDirty(p.cy * this.map.width + p.cx);
   }
 
@@ -562,9 +597,15 @@ export class World {
   injure(pawnId: number, part: BodyPart, kind: WoundKind, damage: number): boolean {
     const p = this.pawns[pawnId];
     if (!p || p.dead) return false;
+    this.hurt(p, part, kind, damage);
+    return true;
+  }
+
+  /** Рана любому бойцу — колонисту или налётчику. */
+  hurt(p: Pawn, part: BodyPart, kind: WoundKind, damage: number): void {
+    if (p.dead) return;
     addWound(p, part, kind, damage);
     this.checkVitals(p);
-    return true;
   }
 
   /** Заморозки гибнут незрелые посевы. */

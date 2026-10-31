@@ -250,3 +250,44 @@ export const HEALTH = {
   /** Боль от которой портится настроение. */
   painMood: 30,
 } as const;
+
+// ---------- Этап 5b: набеги, бой, тревога ----------
+
+/** Оружие: ближнее бьёт вплотную, дальнее стреляет при прямой видимости. Урон — по телу, не по очкам здоровья. */
+export const WEAPONS = {
+  fists: { label: 'Кулаки', melee: true, range: 1.5, cooldown: 50, min: 2, max: 4, kind: 'blunt' },
+  club: { label: 'Дубина', melee: true, range: 1.5, cooldown: 40, min: 5, max: 9, kind: 'blunt' },
+  bow: { label: 'Лук', melee: false, range: 9, cooldown: 70, min: 5, max: 10, kind: 'pierce' },
+} as const;
+
+export const COMBAT = {
+  /** Первый набег не раньше этого дня. */
+  raidFromDay: 15,
+  /** Предупреждение до подхода налётчиков (20 секунд на 1×). */
+  warningTicks: 400,
+  repath: 15,
+  meleeHit: 0.7,
+  rangedBase: 0.3,
+  rangedPerSkill: 0.03,
+  rangedPerCell: 0.02,
+  rangedMin: 0.1,
+  rangedMax: 0.9,
+  /** Укрытие у цели умножает шанс попадания. */
+  coverFactor: 0.55,
+  /** Эффект выстрела/удара на карте, тики. */
+  fxTicks: 12,
+  /** Налётчики бегут, когда выбыла эта доля отряда. */
+  fleeFraction: 0.5,
+  /** Труп налётчика лежит на карте столько тиков. */
+  enemyCorpseTicks: DAY_TICKS,
+  /** Навык налётчиков. */
+  raiderSkillMin: 3,
+  raiderSkillMax: 9,
+  /** Сколько дубин лежит рядом со стартом в новой игре. */
+  startClubs: 2,
+  /** Вес попадания по частям тела. */
+  partWeights: { torso: 40, head: 10, armL: 12, armR: 12, legL: 13, legR: 13 },
+  /** Размер набега: 2 + прошлые набеги/2 + избыток колонистов, не больше 8; луки с третьего набега. */
+  raidMaxSize: 8,
+  equipTicks: 15,
+} as const;

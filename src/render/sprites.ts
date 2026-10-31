@@ -314,6 +314,30 @@ function buildItem(kind: ItemKind): HTMLCanvasElement {
       p.px(9, 10, '#C47F2E');
       p.px(10, 8, '#6BAA5C');
       break;
+    case 'club': {
+      for (let i = 0; i < 9; i++) {
+        p.px(3 + i, 13 - i, '#6B4524');
+        p.px(4 + i, 13 - i, '#8A5A33');
+        p.px(4 + i, 12 - i, '#A97A4A');
+      }
+      p.disc(11.5, 4.5, 2.6, '#6B4524');
+      p.disc(11.2, 4.2, 2, '#8A5A33');
+      p.px(10, 3, '#C79A62');
+      p.px(3, 14, '#3E2813');
+      break;
+    }
+    case 'bow': {
+      for (const [x, y] of [[11, 2], [12, 3], [12, 4], [13, 5], [13, 6], [13, 7], [13, 8], [13, 9], [13, 10], [12, 11], [12, 12], [11, 13]] as const) {
+        p.px(x, y, '#8A5A33');
+        p.px(x - 1, y, '#5E3B1E');
+      }
+      p.rect(10, 3, 1, 10, '#E8E6E1'); // тетива
+      p.rect(3, 8, 8, 1, '#A97A4A'); // стрела
+      p.px(2, 8, '#C9C6BF');
+      p.px(1, 7, '#E8E6E1');
+      p.px(1, 9, '#E8E6E1');
+      break;
+    }
     case 'silver':
       p.disc(7, 11, 3.6, '#7C8491');
       p.disc(7, 10, 3.4, '#D5DAE0');

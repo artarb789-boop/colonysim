@@ -1,4 +1,6 @@
 import { BUILD, BUSH_MAX_BERRIES, CROP } from '../sim/balance';
+import { totalDamage } from '../sim/health';
+import type { Pawn } from '../sim/pawn';
 import { jobFraction } from '../sim/jobs';
 import type { Point } from '../sim/pathfinding';
 import type { GameMap } from '../sim/map';
@@ -142,7 +144,40 @@ export class Renderer {
       ctx.fillStyle = `rgba(8,14,38,${view.darkness.toFixed(3)})`;
       ctx.fillRect(0, 0, this.viewW, this.viewH);
     }
+    this.drawFx(world, cam);
     this.drawPreview(cam, view);
+  }
+
+  /** Эффекты ударов и выстрелов. */
+  private drawFx(world: World, cam: Camera): void {
+    const ctx = this.ctx;
+    const z = cam.zoom;
+    for (const f of world.fx) {
+      const left = (f.until - world.tickCount) / 12;
+      const a = cam.worldToScreen(f.x0, f.y0);
+      const b = cam.worldToScreen(f.x1, f.y1);
+      ctx.globalAlpha = Math.max(0, Math.min(1, left));
+      if (f.kind === 'shot') {
+        ctx.strokeStyle = '#F2E0A0';
+        ctx.lineWidth = Math.max(1.5, z * 0.06);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y - z * 0.1);
+        ctx.lineTo(b.x, b.y - z * 0.1);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = '#E8E6E1';
+        ctx.lineWidth = Math.max(2, z * 0.08);
+        ctx.beginPath();
+        ctx.arc(b.x, b.y - z * 0.1, z * 0.34, -2.4, -0.7);
+        ctx.stroke();
+      }
+      ctx.fillStyle = f.hit ? '#E4564D' : '#A3A8AD';
+      const r = Math.max(2, z * (f.hit ? 0.16 : 0.09));
+      ctx.beginPath();
+      ctx.arc(b.x, b.y - z * 0.1, r * (1.4 - left * 0.4), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
 
   private cellRect(cam: Camera, idx: number): { x: number; y: number; s: number } {
@@ -307,7 +342,7 @@ export class Renderer {
     }
 
     // Рисуем сверху вниз по экрану, чтобы нижние закрывали верхних.
-    const order = world.pawns.filter((p) => !p.buried).sort((a, b) => a.y - b.y);
+    const order: Pawn[] = [...world.pawns, ...world.enemies].filter((p) => !p.buried).sort((a, b) => a.y - b.y);
     const size = z * 1.1;
     for (const p of order) {
       const px = p.prevX + (p.x - p.prevX) * alpha;
@@ -350,6 +385,21 @@ export class Renderer {
         ctx.drawImage(sprite, ps.x - size / 2, ps.y + z * 0.36 - size * 0.92 - bob, size, size);
       }
 
+      // оружие в руках
+      if (p.weapon && !p.dead && !sleeping) {
+        const left = Math.cos(p.facing) < -0.3;
+        const ws = z * 0.5;
+        ctx.drawImage(itemSprite(p.weapon), ps.x + (left ? -z * 0.55 : z * 0.1), ps.y - z * 0.28 - bob, ws, ws);
+      }
+      // шкала ран у раненых бойцов
+      if (!p.dead && p.wounds.length > 0) {
+        const hw = Math.max(16, z * 0.7);
+        const hy = ps.y + z * 0.46;
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(ps.x - hw / 2 - 1, hy - 1, hw + 2, 4);
+        ctx.fillStyle = '#F08A7E';
+        ctx.fillRect(ps.x - hw / 2, hy, hw * Math.max(0, 1 - totalDamage(p) / 60), 2);
+      }
       const frac = p.dead ? null : jobFraction(p);
       if (frac !== null) {
         const bw = Math.max(18, z * 0.9);

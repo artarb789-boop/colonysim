@@ -13,9 +13,10 @@ import { World, type Designation } from './world';
  * Версия формата сохранения. При изменении формата — увеличить и добавить миграцию в `migrate`.
  * 1: этап 2. 2: этап 3a (постройки, пол, огород, посевы, чертежи; ключи резервов ×8).
  * 3: этап 4 (рассказчик, журнал; черты, болезнь, температурные состояния у поселенцев).
- * 4: этап 5 (раны, кровь, смерть у поселенцев).
+ * 4: этап 5a (раны, кровь, смерть у поселенцев).
+ * 5: этап 5b (налётчики, тревога, оружие, набеги в рассказчике).
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 export interface SaveData {
   version: number;
@@ -36,6 +37,11 @@ export interface SaveData {
   reservations: [number, number][];
   /** Состояние ГПСЧ симуляции (может отсутствовать в старых сохранениях). */
   rng?: number;
+  /** Налётчики, тревога (может отсутствовать в старых сохранениях). */
+  enemies?: Pawn[];
+  alarm?: boolean;
+  alarmAuto?: boolean;
+  nextEnemyId?: number;
   /** Гуляют ли праздные (может отсутствовать — тогда да). */
   stroll?: boolean;
   /** Рассказчик и журнал (в сохранениях версии 2 их нет). */
@@ -65,6 +71,10 @@ export function serializeWorld(w: World): SaveData {
       reservations: w.exportReservations(),
       rng: w.rng.getState(),
       stroll: w.stroll,
+      enemies: w.enemies,
+      alarm: w.alarm,
+      alarmAuto: w.alarmAuto,
+      nextEnemyId: w.nextEnemyId,
       story: w.story,
       log: w.log,
       logSeq: w.logSeq,
@@ -84,7 +94,8 @@ function migrate(raw: unknown): unknown {
     return migrate({ ...migrateV1(raw) });
   }
   if (raw.version === 2) return migrate({ ...raw, version: 3 });
-  if (raw.version === 3) return { ...raw, version: 4 };
+  if (raw.version === 3) return migrate({ ...raw, version: 4 });
+  if (raw.version === 4) return { ...raw, version: 5 };
   return raw.version === SAVE_VERSION ? raw : null;
 }
 
@@ -168,6 +179,20 @@ export function restoreWorld(data: unknown): World | null {
     // сохранение до этапа 4: первое событие — через обычный срок от текущего момента
     w.story.nextEventTick = d.tick + w.rng.int(STORY.firstMin, STORY.firstMax);
   }
+  if (d.story) {
+    w.story.raid ??= null;
+    w.story.raidActive ??= false;
+    w.story.raidFled ??= false;
+    w.story.raidsDone ??= 0;
+    w.story.peaceful ??= false;
+  }
+  for (const e of d.enemies ?? []) {
+    normalizePawn(e, d.seed);
+    w.enemies.push(e);
+  }
+  w.alarm = d.alarm ?? false;
+  w.alarmAuto = d.alarmAuto ?? false;
+  w.nextEnemyId = d.nextEnemyId ?? w.enemies.length;
   w.log = d.log ?? [];
   w.logSeq = d.logSeq ?? w.log.length;
   return w;
@@ -191,5 +216,10 @@ function normalizePawn(p: Pawn, seed: number): void {
   p.deathTick ??= 0;
   p.carriedBy ??= null;
   p.buried ??= false;
+  p.weapon ??= null;
+  p.faction ??= 'colony';
+  p.attackCooldown ??= 0;
+  p.aiTimer ??= 0;
+  p.fleeing ??= false;
   p.traits ??= pickTraits(new Rng((seed ^ ((p.id + 1) * 7919)) >>> 0));
 }

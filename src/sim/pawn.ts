@@ -90,6 +90,16 @@ export interface Pawn {
   carriedBy: number | null;
   /** Труп похоронен и убран с карты. */
   buried: boolean;
+  /** Оружие в руках (иначе кулаки). */
+  weapon: 'club' | 'bow' | null;
+  /** Колонист или налётчик. */
+  faction: 'colony' | 'raider';
+  /** Тиков до следующего удара/выстрела. */
+  attackCooldown: number;
+  /** Тиков до пересчёта пути в бою. */
+  aiTimer: number;
+  /** Налётчик бежит с карты. */
+  fleeing: boolean;
 }
 
 export function createPawn(id: number, name: string, color: string, x: number, y: number, rng: Rng): Pawn {
@@ -132,6 +142,11 @@ export function createPawn(id: number, name: string, color: string, x: number, y
     deathTick: 0,
     carriedBy: null,
     buried: false,
+    weapon: null,
+    faction: 'colony',
+    attackCooldown: 0,
+    aiTimer: 0,
+    fleeing: false,
   };
 }
 

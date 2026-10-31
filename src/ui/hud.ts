@@ -2,7 +2,7 @@ import { isBuildTool, type Tool } from '../input/tools';
 import { BUILD, NEEDS } from '../sim/balance';
 import { IMPLEMENTED_WORKS, type WorkType } from '../sim/jobs';
 import type { World } from '../sim/world';
-import { DAY_TICKS, TRADE } from '../sim/balance';
+import { DAY_TICKS, TRADE, WEAPONS } from '../sim/balance';
 import { calendar } from '../sim/climate';
 import { acceptStranger, declineStranger, fireEvent, type EventId } from '../sim/events';
 import { BODY_PARTS, consciousness, pain, bleedRate, type BodyPart, type WoundKind } from '../sim/health';
@@ -85,7 +85,7 @@ function toolHint(tool: Tool): string {
   return base;
 }
 
-const SIDE_BUTTONS = ['Колония', 'Работы', 'Строить', 'Приказы', 'Ещё'] as const;
+const SIDE_BUTTONS = ['Колония', 'Работы', 'Строить', 'Приказы', 'Ещё', 'Тревога'] as const;
 type Side = (typeof SIDE_BUTTONS)[number];
 
 /** Все DOM-панели поверх карты: боковая панель, карточка поселенца, ресурсы, предупреждения, окна, меню. */
@@ -129,6 +129,7 @@ export class Hud {
     thoughts: el('div', 'thoughts'),
     traits: el('div', 'traits'),
     health: el('div', 'healthbox'),
+    weapon: el('div', 'weaponline'),
   };
   private readonly modal = el('div', 'modal');
   private readonly modalTitle = el('div', 'modal__title');
@@ -182,6 +183,10 @@ export class Hud {
     else if (label === 'Работы') this.openWorkTable();
     else if (label === 'Строить') this.setBar(this.bar === 'build' ? null : 'build');
     else if (label === 'Приказы') this.setBar(this.bar === 'orders' ? null : 'orders');
+    else if (label === 'Тревога') {
+      this.world.setAlarm(!this.world.alarm);
+      this.showToast(this.world.alarm ? 'Тревога: колонисты берут оружие' : 'Тревога отменена');
+    }
     else this.openMore();
   }
 
@@ -228,9 +233,9 @@ export class Hud {
 
   private buildResources(root: HTMLElement): void {
     this.resources.append(this.weather);
-    for (const kind of ['wood', 'stone', 'berries', 'rice', 'meal', 'silver'] as const) {
+    for (const kind of ['wood', 'stone', 'berries', 'rice', 'meal', 'silver', 'weapon'] as const) {
       const item = el('div', 'resources__item');
-      item.append(el('span', `resources__dot resources__dot--${kind}`), el('span', 'resources__label', ITEM_LABELS[kind]));
+      item.append(el('span', `resources__dot resources__dot--${kind}`), el('span', 'resources__label', kind === 'weapon' ? 'Оружие' : ITEM_LABELS[kind]));
       const v = el('span', 'resources__value mono', '0');
       item.append(v);
       this.resEls.set(kind, v);
@@ -278,7 +283,7 @@ export class Hud {
       needs.append(row);
       c.bars.set(key, { fill: f, value });
     }
-    needs.append(el('div', 'tabpanel__title', 'Мысли'), c.thoughts);
+    needs.append(el('div', 'tabpanel__title', 'Мысли'), c.thoughts, el('div', 'tabpanel__title', 'Оружие'), c.weapon);
     c.panels.set('needs', needs);
     // навыки
     const skills = el('div', 'tabpanel');
@@ -664,7 +669,16 @@ export class Hud {
         name,
         () => this.showToast(fireEvent(this.world, id) ? `Событие: ${name}` : `Сейчас нельзя: ${name}`),
       ];
-      group('Вызвать событие', [ev('stranger', 'Странник'), ev('trader', 'Торговец'), ev('illness', 'Болезнь'), ev('coldWave', 'Холодная волна')]);
+      group('Вызвать событие', [ev('stranger', 'Странник'), ev('trader', 'Торговец'), ev('illness', 'Болезнь'), ev('coldWave', 'Холодная волна'), ev('raid', 'Набег')]);
+      const peace = el('button', 'btn btn--wide btn--gap', '');
+      peace.type = 'button';
+      const paintPeace = () => setText(peace, this.world.story.peaceful ? 'Мирный режим: включён (набегов нет)' : 'Мирный режим: выключен');
+      peace.addEventListener('click', () => {
+        this.world.story.peaceful = !this.world.story.peaceful;
+        paintPeace();
+      });
+      paintPeace();
+      body.append(peace);
       const hurt = (label: string, wounds: [BodyPart, WoundKind, number][]): [string, () => void] => [
         label,
         () => {
@@ -741,6 +755,8 @@ export class Hud {
     setText(this.resEls.get('rice')!, String(stock.rice));
     setText(this.resEls.get('meal')!, String(stock.meal));
     setText(this.resEls.get('silver')!, String(stock.silver));
+    setText(this.resEls.get('weapon')!, String(stock.club + stock.bow));
+    this.side.get('Тревога')!.classList.toggle('active', this.world.alarm);
     this.updateWeather();
     this.updateEvents();
 
@@ -769,6 +785,7 @@ export class Hud {
           setText(b.value, String(Math.round(v)));
         }
         this.updateThoughts(p);
+        setText(c.weapon, p.weapon ? WEAPONS[p.weapon].label : 'Нет — бьёт кулаками');
       } else if (this.tab === 'skills') {
         for (const [id, b] of c.skills) {
           const v = p.skills[id];
@@ -940,6 +957,12 @@ export class Hud {
     if (this.world.story.pending) chips.push({ text: `Странник ${this.world.story.pending.pawn.name} просит приюта`, level: 'good', action: () => this.openStranger() });
     if (this.world.traderPresent) chips.push({ text: 'Прибыл торговец', level: 'good', action: () => this.openTrade() });
     if (this.world.story.coldWaveUntil > tick) chips.push({ text: 'Холодная волна', level: 'warn' });
+    if (this.world.story.raid) {
+      const sec = Math.max(0, Math.ceil((this.world.story.raid.at - tick) / 20));
+      chips.push({ text: `Набег через ${sec} с: ${this.world.story.raid.count} чел.`, level: 'bad' });
+    }
+    const foes = this.world.enemies.filter((e) => !e.dead && !e.downed).length;
+    if (foes > 0) chips.push({ text: `Налётчики: ${foes}`, level: 'bad' });
     for (const p of this.world.living) {
       if (p.needs.food <= 0) chips.push({ text: `${p.name} голодает`, level: 'bad' });
       else if (p.needs.food < NEEDS.foodUrgent) chips.push({ text: `${p.name} голоден`, level: 'warn' });

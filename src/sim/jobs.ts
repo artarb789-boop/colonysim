@@ -2,6 +2,7 @@ import {
   BERRY_STOCK_TARGET,
   BUILD,
   BUILD_WAIT_LIMIT,
+  COMBAT,
   BUSH_REGROW_TICKS,
   CARRY_MAX,
   COOK,
@@ -18,7 +19,8 @@ import {
   WORK_TICKS,
 } from './balance';
 import { blocksMovement, kindOfStructure, type BuildKind } from './build';
-import { isFood, type ItemKind } from './items';
+import { engage } from './combat';
+import { isFood, isWeapon, type ItemKind } from './items';
 import { addThought } from './mood';
 import { Structure, Terrain } from './map';
 import { findPath, findPathToAny, pathCost, type Point } from './pathfinding';
@@ -57,6 +59,8 @@ export type JobKind =
   | 'build'
   | 'deconstruct'
   | 'cook'
+  | 'equip'
+  | 'fight'
   | 'treat'
   | 'rescue'
   | 'bury'
@@ -702,8 +706,57 @@ export function planStroll(world: World, pawn: Pawn): Plan {
   return stay;
 }
 
+/** Взять ближайшее оружие, если руки пусты. */
+function planEquip(world: World, pawn: Pawn): Plan | null {
+  if (pawn.weapon !== null) return null;
+  const stacks: number[] = [];
+  for (const [idx, s] of world.items.stacks) if (isWeapon(s.kind) && s.count > 0 && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
+  return bestOf(
+    stacks,
+    (idx) => pointOf(world, idx),
+    originOf(pawn),
+    (idx) => {
+      const target = pointOf(world, idx);
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'equip', phase: 'move', target, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Item, idx]],
+      };
+    },
+  );
+}
+
+/** Бой с ближайшим налётчиком (только при тревоге). */
+function planFight(world: World, pawn: Pawn): Plan | null {
+  if (!world.alarm) return null;
+  const o = originOf(pawn);
+  let best: Pawn | null = null;
+  let bestD = Infinity;
+  for (const e of world.enemies) {
+    if (e.dead || e.downed) continue;
+    const d = octile(e.cx - o.x, e.cy - o.y);
+    if (d < bestD) {
+      bestD = d;
+      best = e;
+    }
+  }
+  if (!best) return null;
+  return { job: { kind: 'fight', phase: 'act', target: { x: best.cx, y: best.cy }, patientId: best.id, progress: 0, duration: 0 }, path: [], cost: 0, reserve: [] };
+}
+
+/** При тревоге: сначала вооружиться, затем в бой. */
+function planAlarm(world: World, pawn: Pawn): Plan | null {
+  if (!world.alarm || pawn.downed) return null;
+  return planEquip(world, pawn) ?? planFight(world, pawn);
+}
+
 /** Срочные нужды: еда, затем сон, затем отдых. */
 export function planUrgent(world: World, pawn: Pawn): Plan | null {
+  const alarm = planAlarm(world, pawn);
+  if (alarm) return alarm;
   const n = pawn.needs;
   if (n.food < NEEDS.foodUrgent) {
     const p = planEat(world, pawn);
@@ -719,6 +772,8 @@ export function planUrgent(world: World, pawn: Pawn): Plan | null {
 
 /** Критические нужды — единственное, что прерывает рабочую задачу. */
 export function planCritical(world: World, pawn: Pawn): Plan | null {
+  const alarm = planAlarm(world, pawn);
+  if (alarm) return alarm;
   const n = pawn.needs;
   if (n.food <= NEEDS.foodCritical) {
     const p = planEat(world, pawn);
@@ -833,6 +888,12 @@ function stillValid(world: World, pawn: Pawn, job: Job): boolean {
     }
     case 'downed':
       return true;
+    case 'fight': {
+      const e = world.enemies.find((x) => x.id === job.patientId);
+      return world.alarm && !!e && !e.dead && !e.downed;
+    }
+    case 'equip':
+      return pawn.weapon === null && (world.items.stacks.get(idx)?.count ?? 0) > 0;
     case 'cook':
       if (world.map.structure[idxOf(world, job.dest!)] !== Structure.Stove) return false;
       if (job.phase === 'move2' || job.phase === 'act2') return true;
@@ -933,6 +994,10 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
         job.phase = 'act2';
         job.duration = job.kind === 'cook' ? COOK.ticks / speed : WORK_TICKS.drop;
       }
+      return;
+    case 'equip':
+      job.phase = 'act';
+      job.duration = COMBAT.equipTicks;
       return;
     case 'treat': {
       const q = world.pawns[job.patientId!];
@@ -1063,6 +1128,15 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
         w.treated = true;
         w.bleed = 0;
         w.quality = 1 + pawn.skills.medicine * HEALTH.qualityPerSkill;
+      }
+      endJob(world, pawn);
+      return;
+    }
+    case 'equip': {
+      const stack = world.items.stacks.get(idx);
+      if (stack && isWeapon(stack.kind) && pawn.weapon === null) {
+        pawn.weapon = stack.kind;
+        world.items.take(idx, 1);
       }
       endJob(world, pawn);
       return;
@@ -1265,6 +1339,12 @@ export function runJob(world: World, pawn: Pawn): void {
   if (!job) return;
   if (!stillValid(world, pawn, job)) {
     endJob(world, pawn);
+    return;
+  }
+
+  if (job.kind === 'fight') {
+    const e = world.enemies.find((x) => x.id === job.patientId);
+    if (e) engage(world, pawn, e);
     return;
   }
 

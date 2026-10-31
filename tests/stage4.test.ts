@@ -362,6 +362,7 @@ describe('рассказчик', () => {
 
   it('при полной колонии странники не приходят', () => {
     const w = new World(3, { ai: false, pawnCount: 4 });
+    w.story.peaceful = true; // иначе на 15-е сутки придёт набег и выкосит неподвижных поселенцев
     while (w.pawns.length < STORY.maxPawns) w.pawns.push({ ...w.pawns[0]!, id: w.pawns.length, traits: [] });
     run(w, DAY_TICKS * 30);
     expect(w.story.pending).toBeNull();

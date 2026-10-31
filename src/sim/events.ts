@@ -1,7 +1,8 @@
-import { COLD_WAVE, SICK, STORY } from './balance';
+import { COLD_WAVE, COMBAT, SICK, STORY } from './balance';
 import { calendar } from './climate';
 import { createPawn, isSick, SKILLS, type Pawn } from './pawn';
 import type { Point } from './pathfinding';
+import { raidSize, spawnRaid } from './raid';
 import type { World } from './world';
 
 /** Состояние рассказчика. Всё хранится в сохранении. */
@@ -13,6 +14,15 @@ export interface Story {
   trader: { until: number } | null;
   /** Странник, ждущий решения игрока. */
   pending: { pawn: Pawn; until: number } | null;
+  /** Набег приближается: спавн в тик `at`. */
+  raid: { at: number; count: number; bows: number } | null;
+  /** Налётчики сейчас на карте. */
+  raidActive: boolean;
+  /** Кто-то из налётчиков убежал (для сообщения в конце). */
+  raidFled: boolean;
+  raidsDone: number;
+  /** Мирный режим: набегов нет. */
+  peaceful: boolean;
 }
 
 export interface LogEntry {
@@ -32,6 +42,11 @@ export function initStory(rngInt: (min: number, max: number) => number, fromTick
     coldWaveUntil: 0,
     trader: null,
     pending: null,
+    raid: null,
+    raidActive: false,
+    raidFled: false,
+    raidsDone: 0,
+    peaceful: false,
   };
 }
 
@@ -87,7 +102,15 @@ export function declineStranger(world: World): boolean {
   return true;
 }
 
-export type EventId = 'stranger' | 'coldWave' | 'illness' | 'trader';
+export type EventId = 'stranger' | 'coldWave' | 'illness' | 'trader' | 'raid';
+
+/** Можно ли сейчас запустить набег. force — игнорировать мирный режим и день (для проверки). */
+function raidAllowed(world: World, force: boolean): boolean {
+  const s = world.story;
+  if (s.raid || s.raidActive || world.living.length === 0) return false;
+  if (force) return true;
+  return !s.peaceful && calendar(world.tickCount).day >= COMBAT.raidFromDay;
+}
 
 function weights(world: World): [EventId, number][] {
   const season = calendar(world.tickCount).season;
@@ -97,13 +120,14 @@ function weights(world: World): [EventId, number][] {
     ['coldWave', world.story.coldWaveUntil > world.tickCount ? 0 : [1, 0, 2, 4][season]!],
     ['illness', healthy.length > 0 ? 2 : 0],
     ['trader', world.story.trader ? 0 : 2],
+    ['raid', raidAllowed(world, false) ? 3 : 0],
   ];
 }
 
 /** Запустить событие вручную (для тестирования). Возвращает false, если сейчас оно невозможно. */
 export function fireEvent(world: World, id: EventId): boolean {
   const ok = weights(world).find(([e]) => e === id)?.[1] ?? 0;
-  const allowed = id === 'coldWave' ? world.story.coldWaveUntil <= world.tickCount : ok > 0;
+  const allowed = id === 'coldWave' ? world.story.coldWaveUntil <= world.tickCount : id === 'raid' ? raidAllowed(world, true) : ok > 0;
   if (!allowed) return false;
   fire(world, id);
   return true;
@@ -134,6 +158,17 @@ function fire(world: World, id: EventId): void {
       world.story.trader = { until: tick + STORY.traderTicks };
       world.addLog('Прибыл торговец, он пробудет 3 дня');
       return;
+    case 'raid': {
+      const { count, bows } = raidSize(world);
+      world.story.raid = { at: tick + COMBAT.warningTicks, count, bows };
+      world.addLog(`Приближается набег: ${count} налётчиков!`);
+      // на время набега включаем тревогу — колонисты берут оружие
+      if (!world.alarm) {
+        world.alarm = true;
+        world.alarmAuto = true;
+      }
+      return;
+    }
   }
 }
 
@@ -150,6 +185,20 @@ export function tickStory(world: World): void {
     s.coldWaveUntil = 0;
     world.invalidateTemp();
     world.addLog('Холодная волна закончилась');
+  }
+  if (s.raid && tick >= s.raid.at) {
+    const r = s.raid;
+    s.raid = null;
+    if (spawnRaid(world, r.count, r.bows)) {
+      s.raidActive = true;
+      world.addLog('Налётчики вышли к колонии');
+    } else {
+      world.addLog('Налётчики заблудились и ушли');
+      if (world.alarmAuto) {
+        world.alarm = false;
+        world.alarmAuto = false;
+      }
+    }
   }
   if (tick < s.nextEventTick) return;
 

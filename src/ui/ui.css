@@ -1039,3 +1039,16 @@ body.has-card .warnings {
 .gameover .btn {
   margin-top: 12px;
 }
+
+/* ---------- Этап 5b: тревога и оружие ---------- */
+
+.sidebar__btn:last-child.active {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--bg);
+}
+.resources__dot--weapon {
+  background: #9a6b43;
+  border-radius: 1px;
+  transform: rotate(45deg) scale(0.8);
+}
