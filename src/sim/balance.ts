@@ -108,7 +108,13 @@ export const DECONSTRUCT = { refund: 0.5, timeFactor: 0.5 } as const;
 export const BUILD_WAIT_LIMIT = 400;
 
 /** Огород: рис растёт 2 игровых дня, при сборе даёт yield штук. */
-export const CROP = { growTicks: DAY_TICKS * 2, yield: 6, sowTicks: 60, reapTicks: 80 } as const;
+export const CROP = { growTicks: DAY_TICKS * 2, yield: 4, sowTicks: 60, reapTicks: 80 } as const;
+
+/**
+ * Новый посев начинают, только пока «запас» меньше цели: рис и трава на карте плюс то, что ещё вырастет на грядках.
+ * Иначе огород бесконечно забивает склад.
+ */
+export const CROP_STOCK_TARGET = { rice: 60, herb: 16 } as const;
 
 /** Сколько еды (0–100) даёт одна единица продукта. */
 export const FOOD_VALUE = { berries: 10, rice: 10, meal: 40 } as const;
@@ -296,7 +302,7 @@ export const COMBAT = {
 // ---------- Этап 5c: верстак, ремесло, лекарства ----------
 
 /** Целебная трава: отдельная культура огорода, быстрее риса. */
-export const HERB = { growTicks: Math.round(DAY_TICKS * 1.5), yield: 3, sowTicks: 60, reapTicks: 70 } as const;
+export const HERB = { growTicks: Math.round(DAY_TICKS * 1.5), yield: 2, sowTicks: 60, reapTicks: 70 } as const;
 
 /** Рецепты верстака: из count единиц input получается одна единица output. */
 export const RECIPES = {

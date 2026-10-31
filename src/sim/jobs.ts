@@ -8,6 +8,7 @@ import {
   COOK,
   CRAFT,
   CROP,
+  CROP_STOCK_TARGET,
   DECONSTRUCT,
   FOOD_VALUE,
   HEALTH,
@@ -236,7 +237,11 @@ function planHarvest(world: World, pawn: Pawn): Plan | null {
 /** Посев на пустых клетках огорода. */
 function planSow(world: World, pawn: Pawn): Plan | null {
   const cands: number[] = [];
-  for (const set of [world.garden, world.herbs]) {
+  // запас уже достаточный — новые посевы той культуры не начинают
+  const wantRice = world.cropPotential('rice') < CROP_STOCK_TARGET.rice;
+  const wantHerb = world.cropPotential('herb') < CROP_STOCK_TARGET.herb;
+  for (const [set, want] of [[world.garden, wantRice], [world.herbs, wantHerb]] as const) {
+    if (!want) continue;
     for (const idx of set) {
       if (world.map.crops.has(idx) || world.blueprints.has(idx) || world.map.structure[idx] !== Structure.None) continue;
       if (world.isFree(Layer.Crop, idx, pawn.id)) cands.push(idx);

@@ -6,8 +6,10 @@ import {
   BUSH_REGROW_TICKS,
   COLD_WAVE,
   COMBAT,
+  CROP,
   GROW,
   HEALTH,
+  HERB,
   DAY_TICKS,
   MAP_SIZE,
   MOOD,
@@ -45,7 +47,7 @@ import {
 } from './jobs';
 import { GameMap, Structure, Terrain, generateMap } from './map';
 import { calendar, gameTime, growthFactor, indoorTemp, outdoorTemp, type GameTime } from './climate';
-import { growTicksOf, isMature } from './crops';
+import { growTicksOf, isMature, kindOfCrop } from './crops';
 import { initStory, tickStory, type LogEntry, type Story } from './events';
 import { tickEnemies, type Fx } from './raid';
 import { addWound, consciousness, isFatal, stepHealth, type BodyPart, type WoundKind } from './health';
@@ -448,6 +450,18 @@ export class World {
   mealCount(): number {
     let n = this.items.total('meal');
     for (const p of this.pawns) if (p.carrying?.kind === 'meal') n += p.carrying.count;
+    return n;
+  }
+
+  /**
+   * Сколько этой культуры уже есть или вырастет: лежит на земле и на складе, несётся в руках
+   * и ещё стоит на грядках (по урожаю каждого посева).
+   */
+  cropPotential(kind: 'rice' | 'herb'): number {
+    let n = this.items.total(kind);
+    for (const p of this.pawns) if (p.carrying?.kind === kind) n += p.carrying.count;
+    const perCrop = kind === 'herb' ? HERB.yield : CROP.yield;
+    for (const c of this.map.crops.values()) if (kindOfCrop(c) === kind) n += perCrop;
     return n;
   }
 
