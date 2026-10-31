@@ -123,3 +123,26 @@ describe('findPath', () => {
     }
   });
 });
+
+import { findPathToAny } from '../src/sim/pathfinding';
+
+describe('findPathToAny', () => {
+  it('идёт к ближайшей из целей', () => {
+    const m = GameMap.fromRows(['ddddddddd']);
+    const p = findPathToAny(m, 4, 0, [{ x: 0, y: 0 }, { x: 6, y: 0 }])!;
+    expect(p[p.length - 1]).toEqual({ x: 6, y: 0 });
+    expect(p).toHaveLength(2);
+  });
+
+  it('старт в цели → пустой путь', () => {
+    const m = GameMap.fromRows(['ddd']);
+    expect(findPathToAny(m, 1, 0, [{ x: 1, y: 0 }, { x: 2, y: 0 }])).toEqual([]);
+  });
+
+  it('недостижимые и непроходимые цели пропускаются', () => {
+    const m = GameMap.fromRows(['ddsdd']);
+    expect(findPathToAny(m, 0, 0, [{ x: 2, y: 0 }, { x: 4, y: 0 }])).toBeNull();
+    expect(findPathToAny(m, 0, 0, [{ x: 2, y: 0 }, { x: 1, y: 0 }])).toEqual([{ x: 1, y: 0 }]);
+    expect(findPathToAny(m, 0, 0, [])).toBeNull();
+  });
+});

@@ -77,30 +77,43 @@ export function stepCost(map: GameMap, dx: number, dy: number, tx: number, ty: n
 }
 
 /**
- * A* по сетке, 8 направлений, без срезания углов.
- * Возвращает клетки пути БЕЗ стартовой (пустой массив, если старт == цель),
- * либо null, если цель непроходима или недостижима.
+ * A* по сетке, 8 направлений, без срезания углов, до ближайшей из целей.
+ * Возвращает клетки пути БЕЗ стартовой (пустой массив, если старт уже в цели),
+ * либо null, если ни одна цель недостижима.
  */
-export function findPath(map: GameMap, sx: number, sy: number, tx: number, ty: number): Point[] | null {
-  if (!map.isPassable(sx, sy) || !map.isPassable(tx, ty)) return null;
-  if (sx === tx && sy === ty) return [];
+export function findPathToAny(map: GameMap, sx: number, sy: number, goals: readonly Point[]): Point[] | null {
+  if (!map.isPassable(sx, sy)) return null;
+  const targets = goals.filter((g) => map.isPassable(g.x, g.y));
+  if (targets.length === 0) return null;
 
   const w = map.width;
   const n = w * map.height;
+  const goalMask = new Uint8Array(n);
+  for (const g of targets) goalMask[g.y * w + g.x] = 1;
+  const start = sy * w + sx;
+  if (goalMask[start]) return [];
+
+  const h = (x: number, y: number): number => {
+    let best = Infinity;
+    for (const g of targets) best = Math.min(best, octile(g.x - x, g.y - y));
+    return best;
+  };
+
   const g = new Float64Array(n).fill(Infinity);
   const parent = new Int32Array(n).fill(-1);
   const closed = new Uint8Array(n);
   const open = new MinHeap();
-
-  const start = sy * w + sx;
-  const goal = ty * w + tx;
   g[start] = 0;
-  open.push(octile(tx - sx, ty - sy), start);
+  open.push(h(sx, sy), start);
 
+  let found = -1;
   while (open.size > 0) {
     const cur = open.pop();
     if (closed[cur]) continue;
-    if (cur === goal) break;
+    if (goalMask[cur]) {
+      found = cur;
+      break;
+    }
     closed[cur] = 1;
     const cx = cur % w;
     const cy = (cur - cx) / w;
@@ -116,15 +129,20 @@ export function findPath(map: GameMap, sx: number, sy: number, tx: number, ty: n
       if (ng < g[ni]!) {
         g[ni] = ng;
         parent[ni] = cur;
-        open.push(ng + octile(tx - nx, ty - ny), ni);
+        open.push(ng + h(nx, ny), ni);
       }
     }
   }
 
-  if (parent[goal] === -1) return null;
+  if (found === -1) return null;
   const path: Point[] = [];
-  for (let i = goal; i !== start; i = parent[i]!) path.push({ x: i % w, y: (i - (i % w)) / w });
+  for (let i = found; i !== start; i = parent[i]!) path.push({ x: i % w, y: (i - (i % w)) / w });
   return path.reverse();
+}
+
+/** Путь до одной клетки; null, если цель непроходима или недостижима. */
+export function findPath(map: GameMap, sx: number, sy: number, tx: number, ty: number): Point[] | null {
+  return findPathToAny(map, sx, sy, [{ x: tx, y: ty }]);
 }
 
 /** Полная стоимость пути из (sx, sy). Для тестов и отладки. */

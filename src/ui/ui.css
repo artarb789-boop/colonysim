@@ -5,6 +5,27 @@
   --text: #e8e6e1;
   --text-dim: #a3a8ad;
   --accent: #e8a33d;
+  --blueprint: #5aa9e6;
+  --good: #8fbf5a;
+  --warn: #f0a35e;
+  --bad: #f08a7e;
+  --top: 48px;
+  --side: 72px;
+  --sat: env(safe-area-inset-top);
+  --sar: env(safe-area-inset-right);
+  --sab: env(safe-area-inset-bottom);
+  --sal: env(safe-area-inset-left);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .mono {
@@ -12,14 +33,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- верхняя полоса ---------- */
+
 .topbar {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   box-sizing: border-box;
-  height: calc(48px + env(safe-area-inset-top));
-  padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  height: calc(var(--top) + var(--sat));
+  padding: var(--sat) max(8px, var(--sar)) 0 max(8px, var(--sal));
   display: flex;
   align-items: center;
   gap: 8px;
@@ -46,6 +69,27 @@
   color: var(--text-dim);
 }
 
+.topbar__pawns {
+  display: flex;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+.topbar__pawns button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--pawn);
+  color: var(--bg);
+  font: 600 17px system-ui, sans-serif;
+}
+
+.topbar__pawns button.selected {
+  border-color: var(--text);
+}
+
 .topbar__speeds {
   display: flex;
   gap: 4px;
@@ -58,13 +102,567 @@
   border: 1px solid var(--divider);
   border-radius: 8px;
   background: var(--bg);
-  color: var(--text);
   font: 600 15px ui-monospace, 'IBM Plex Mono', monospace;
-  cursor: pointer;
 }
 
 .topbar__speeds button.active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--bg);
+}
+
+/* ---------- боковая панель ---------- */
+
+.sidebar {
+  position: fixed;
+  top: calc(var(--top) + var(--sat));
+  bottom: 0;
+  left: 0;
+  width: calc(var(--side) + var(--sal));
+  box-sizing: border-box;
+  padding: 6px 6px calc(6px + var(--sab)) calc(6px + var(--sal));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border-right: 1px solid var(--divider);
+  z-index: 9;
+}
+
+.sidebar__btn {
+  flex: 0 0 auto;
+  min-height: 56px;
+  padding: 0 2px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.sidebar__btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+/* ---------- приказы ---------- */
+
+.orders {
+  position: fixed;
+  left: calc(var(--side) + var(--sal) + 8px);
+  bottom: calc(8px + var(--sab));
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  z-index: 9;
+}
+
+.orders__btn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.orders__btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.orders__hint {
+  position: fixed;
+  left: calc(var(--side) + var(--sal) + 8px);
+  bottom: calc(76px + var(--sab));
+  padding: 6px 10px;
+  background: rgba(31, 36, 40, 0.92);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 9;
+}
+
+/* ---------- ресурсы и предупреждения ---------- */
+
+.resources {
+  position: fixed;
+  left: calc(var(--side) + var(--sal) + 8px);
+  bottom: calc(8px + var(--sab));
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(31, 36, 40, 0.92);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 8;
+}
+
+/* при открытых приказах плашка ресурсов уходит выше панели приказов */
+body.orders-open .resources {
+  bottom: calc(76px + var(--sab));
+}
+body.orders-open .orders__hint {
+  bottom: calc(124px + var(--sab));
+}
+
+.resources__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.resources__label {
+  color: var(--text-dim);
+}
+
+.resources__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.resources__dot--wood {
+  background: #9a6b43;
+}
+.resources__dot--stone {
+  background: #9a9aa0;
+}
+.resources__dot--berries {
+  background: #d8524a;
+  border-radius: 50%;
+}
+
+.warnings {
+  position: fixed;
+  top: calc(var(--top) + var(--sat) + 8px);
+  right: calc(8px + var(--sar));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 8;
+}
+
+body.has-card .warnings {
+  right: calc(316px + var(--sar));
+}
+
+.chip {
+  padding: 6px 10px;
+  border-radius: 14px;
+  background: rgba(31, 36, 40, 0.94);
+  border: 1px solid var(--divider);
+  font-size: 12px;
+}
+.chip--warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.chip--bad {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+/* ---------- карточка поселенца ---------- */
+
+.pawncard {
+  position: fixed;
+  top: calc(var(--top) + var(--sat) + 8px);
+  right: calc(8px + var(--sar));
+  width: 300px;
+  box-sizing: border-box;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  z-index: 9;
+}
+
+.pawncard__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pawncard__avatar,
+.avatar {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--pawn);
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 18px system-ui, sans-serif;
+}
+.avatar--small {
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+}
+
+.pawncard__name {
+  font-size: 16px;
+  font-weight: 600;
+}
+.pawncard__task {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.bar__fill {
+  height: 100%;
+  width: 0;
+  background: var(--good);
+  transition: width 0.1s linear;
+}
+.bar__fill.warn {
+  background: var(--warn);
+}
+.bar__fill.bad {
+  background: var(--bad);
+}
+.bar--progress {
+  margin-bottom: 10px;
+}
+.bar--progress .bar__fill {
+  background: var(--blueprint);
+}
+
+.need {
+  display: grid;
+  grid-template-columns: 56px 1fr 30px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.need__label {
+  color: var(--text-dim);
+}
+.need__value {
+  text-align: right;
+}
+
+.pawncard__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn {
+  flex: 1;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.btn--wide {
+  width: 100%;
+}
+
+/* ---------- окна ---------- */
+
+.modal {
+  position: fixed;
+  top: calc(var(--top) + var(--sat));
+  left: calc(var(--side) + var(--sal));
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 23, 26, 0.6);
+  z-index: 20;
+}
+
+.modal__panel {
+  box-sizing: border-box;
+  width: min(560px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px 6px 16px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 16px;
+  font-weight: 600;
+}
+.modal__close {
+  flex: 0 0 44px;
+  padding: 0;
+}
+.modal__body {
+  touch-action: pan-y;
+  padding: 12px;
+  overflow: auto;
+}
+.modal__note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.worktable {
+  width: 100%;
+  border-collapse: collapse;
+}
+.worktable th {
+  padding: 4px 6px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 13px;
+  vertical-align: middle;
+}
+.worktable td {
+  padding: 4px 6px;
+  text-align: center;
+}
+.worktable th .avatar {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.worktable__name {
+  vertical-align: middle;
+}
+.worktable__work {
+  display: block;
+}
+.worktable__hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.prio {
+  width: 48px;
+  height: 44px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font: 600 16px ui-monospace, 'IBM Plex Mono', monospace;
+}
+.prio--1 {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.prio--2 {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.prio--3 {
+  color: var(--text);
+}
+
+.colonyrow {
+  width: 100%;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--bg);
+  text-align: left;
+}
+.colonyrow__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.colonyrow__task {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.colonyrow__needs {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---------- контекстное меню и уведомления ---------- */
+
+.ctxmenu {
+  position: fixed;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  overflow: hidden;
+  z-index: 30;
+}
+.ctxmenu__item {
+  min-height: 48px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: transparent;
+  text-align: left;
+}
+.ctxmenu__item:last-child {
+  border-bottom: 0;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(80px + var(--sab));
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 40;
+}
+
+/* ---------- вертикальный режим ---------- */
+
+@media (orientation: portrait) {
+  :root {
+    --top: 96px;
+    --bottom: 56px;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: 48px 48px;
+    grid-template-areas:
+      'time speeds'
+      'pawns fps';
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 0;
+  }
+  .topbar__time {
+    grid-area: time;
+  }
+  .topbar__speeds {
+    grid-area: speeds;
+  }
+  .topbar__spacer {
+    display: none;
+  }
+  .topbar__pawns {
+    grid-area: pawns;
+    margin-left: 0;
+  }
+  .topbar__fps {
+    grid-area: fps;
+  }
+
+  .sidebar {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: calc(var(--bottom) + var(--sab));
+    padding: 6px max(6px, var(--sar)) calc(6px + var(--sab)) max(6px, var(--sal));
+    flex-direction: row;
+    border-right: 0;
+    border-top: 1px solid var(--divider);
+  }
+  .sidebar__btn {
+    flex: 1;
+    min-height: 44px;
+    font-size: 11px;
+  }
+
+  .resources {
+    left: calc(8px + var(--sal));
+    bottom: auto;
+    top: calc(var(--top) + var(--sat) + 8px);
+  }
+  body.orders-open .resources {
+    bottom: auto;
+  }
+
+  .warnings {
+    top: calc(var(--top) + var(--sat) + 56px);
+    right: calc(8px + var(--sar));
+  }
+  body.has-card .warnings {
+    right: calc(8px + var(--sar));
+  }
+
+  .pawncard {
+    top: auto;
+    left: calc(8px + var(--sal));
+    right: calc(8px + var(--sar));
+    width: auto;
+    bottom: calc(var(--bottom) + var(--sab) + 8px);
+  }
+
+  .orders {
+    left: calc(8px + var(--sal));
+    right: calc(8px + var(--sar));
+    bottom: calc(var(--bottom) + var(--sab) + 8px);
+    justify-content: space-between;
+  }
+  .orders__btn {
+    flex: 1;
+    padding: 0 4px;
+    font-size: 13px;
+  }
+  .orders__close {
+    flex: 0 0 44px;
+  }
+  .orders__hint {
+    left: calc(8px + var(--sal));
+    bottom: calc(var(--bottom) + var(--sab) + 76px);
+  }
+  body.orders-open .orders__hint {
+    bottom: calc(var(--bottom) + var(--sab) + 76px);
+  }
+  body.orders-open .pawncard {
+    display: none;
+  }
+
+  .modal {
+    left: 0;
+    bottom: calc(var(--bottom) + var(--sab));
+  }
+
+  .toast {
+    bottom: calc(var(--bottom) + var(--sab) + 16px);
+  }
 }

@@ -4,12 +4,25 @@ export interface GestureHandlers {
   onPinch(cx: number, cy: number, scale: number, dx: number, dy: number): void;
   onTap(x: number, y: number): void;
   onDoubleTap(x: number, y: number): void;
+  /** Долгое нажатие (~400 мс без движения). В режиме рисования не вызывается. */
+  onLongPress(x: number, y: number): void;
+  /** Рисование области одним пальцем (только когда controller.draw = true). */
+  onDrawStart(x: number, y: number): void;
+  onDrawMove(x: number, y: number): void;
+  onDrawEnd(x: number, y: number): void;
+  onDrawCancel(): void;
   /** factor > 1 — приблизить. Колесо мыши (для отладки на компьютере). */
   onWheel(x: number, y: number, factor: number): void;
 }
 
+export interface GestureController {
+  /** true — перетаскивание одним пальцем рисует область вместо панорамы. */
+  draw: boolean;
+}
+
 const SLOP = 8; // px: меньше — это ещё тап
-const TAP_MAX_MS = 400; // дольше — зарезервировано под долгое нажатие
+const TAP_MAX_MS = 400;
+const LONG_PRESS_MS = 400;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_DIST = 40;
 
@@ -18,13 +31,22 @@ interface P {
   y: number;
 }
 
-export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
+export function attachGestures(el: HTMLElement, h: GestureHandlers): GestureController {
+  const ctl: GestureController = { draw: false };
   const ptrs = new Map<number, P>();
   let start: P = { x: 0, y: 0 };
   let downAt = 0;
   let moved = false;
   let multi = false;
+  let drawing = false;
+  let longFired = false;
+  let longTimer = 0;
   let lastTap = { t: -Infinity, x: 0, y: 0 };
+
+  const clearLong = () => {
+    window.clearTimeout(longTimer);
+    longTimer = 0;
+  };
 
   el.addEventListener('pointerdown', (e) => {
     try {
@@ -38,8 +60,24 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
       downAt = performance.now();
       moved = false;
       multi = false;
+      drawing = false;
+      longFired = false;
+      clearLong();
+      if (!ctl.draw) {
+        longTimer = window.setTimeout(() => {
+          if (ptrs.size === 1 && !moved && !multi) {
+            longFired = true;
+            h.onLongPress(start.x, start.y);
+          }
+        }, LONG_PRESS_MS);
+      }
     } else {
       multi = true;
+      clearLong();
+      if (drawing) {
+        drawing = false;
+        h.onDrawCancel();
+      }
     }
   });
 
@@ -52,14 +90,22 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
       if (!moved) {
         if (Math.hypot(cur.x - start.x, cur.y - start.y) <= SLOP) return;
         moved = true;
-        h.onPan(cur.x - start.x, cur.y - start.y);
-      } else {
+        clearLong();
+        if (ctl.draw) {
+          drawing = true;
+          h.onDrawStart(start.x, start.y);
+          h.onDrawMove(cur.x, cur.y);
+        } else {
+          h.onPan(cur.x - start.x, cur.y - start.y);
+        }
+      } else if (drawing) {
+        h.onDrawMove(cur.x, cur.y);
+      } else if (!longFired) {
         h.onPan(cur.x - prev.x, cur.y - prev.y);
       }
       ptrs.set(e.pointerId, cur);
     } else if (ptrs.size === 2) {
-      const others = [...ptrs.entries()].filter(([id]) => id !== e.pointerId);
-      const other = others[0]![1];
+      const other = [...ptrs.entries()].find(([id]) => id !== e.pointerId)![1];
       const oldDist = Math.hypot(prev.x - other.x, prev.y - other.y);
       const newDist = Math.hypot(cur.x - other.x, cur.y - other.y);
       const oldC = { x: (prev.x + other.x) / 2, y: (prev.y + other.y) / 2 };
@@ -75,9 +121,14 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     if (!ptrs.has(e.pointerId)) return;
     const wasSingle = ptrs.size === 1 && !multi;
     ptrs.delete(e.pointerId);
+    clearLong();
     if (ptrs.size === 0) {
       const now = performance.now();
-      if (!cancelled && wasSingle && !moved && now - downAt < TAP_MAX_MS) {
+      if (drawing) {
+        drawing = false;
+        if (cancelled) h.onDrawCancel();
+        else h.onDrawEnd(e.clientX, e.clientY);
+      } else if (!cancelled && wasSingle && !moved && !longFired && now - downAt < TAP_MAX_MS) {
         const near = Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < DOUBLE_TAP_DIST;
         if (now - lastTap.t < DOUBLE_TAP_MS && near) {
           lastTap.t = -Infinity;
@@ -101,4 +152,5 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     },
     { passive: false },
   );
+  return ctl;
 }

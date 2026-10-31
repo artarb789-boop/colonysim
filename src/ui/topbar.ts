@@ -2,17 +2,33 @@ import './ui.css';
 
 const LABELS = ['II', '1×', '2×', '3×'];
 
+export interface PawnChip {
+  id: number;
+  name: string;
+  color: string;
+}
+
 export class TopBar {
   private readonly buttons: HTMLButtonElement[] = [];
+  private readonly chips = new Map<number, HTMLButtonElement>();
   private readonly timeEl: HTMLSpanElement;
   private readonly fpsEl: HTMLSpanElement;
+  private readonly pawnsEl: HTMLDivElement;
 
-  constructor(root: HTMLElement, onSpeed: (index: number) => void) {
+  constructor(
+    root: HTMLElement,
+    onSpeed: (index: number) => void,
+    private readonly onPawn: (id: number) => void,
+  ) {
     root.classList.add('topbar');
 
     this.timeEl = document.createElement('span');
     this.timeEl.className = 'topbar__time mono';
     root.append(this.timeEl);
+
+    this.pawnsEl = document.createElement('div');
+    this.pawnsEl.className = 'topbar__pawns';
+    root.append(this.pawnsEl);
 
     const spacer = document.createElement('span');
     spacer.className = 'topbar__spacer';
@@ -34,6 +50,26 @@ export class TopBar {
     this.fpsEl = document.createElement('span');
     this.fpsEl.className = 'topbar__fps mono';
     root.append(this.fpsEl);
+  }
+
+  setPawns(pawns: readonly PawnChip[]): void {
+    this.pawnsEl.replaceChildren();
+    this.chips.clear();
+    for (const p of pawns) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = p.name.charAt(0);
+      b.title = p.name;
+      b.setAttribute('aria-label', p.name);
+      b.style.setProperty('--pawn', p.color);
+      b.addEventListener('click', () => this.onPawn(p.id));
+      this.pawnsEl.append(b);
+      this.chips.set(p.id, b);
+    }
+  }
+
+  setSelected(id: number | null): void {
+    for (const [pid, b] of this.chips) b.classList.toggle('selected', pid === id);
   }
 
   setSpeed(index: number): void {

@@ -1,4 +1,12 @@
-import { MAP_SIZE, MOVE_COST, START_ZONE_RADIUS } from './balance';
+import {
+  BUSH_COUNT,
+  BUSH_MAX_BERRIES,
+  BUSH_NEAR_START,
+  BUSH_REGROW_TICKS,
+  MAP_SIZE,
+  MOVE_COST,
+  START_ZONE_RADIUS,
+} from './balance';
 import { Rng, hash2 } from './rng';
 
 export const Terrain = { Grass: 0, Dirt: 1, Stone: 2, Water: 3, Tree: 4 } as const;
@@ -12,7 +20,16 @@ const COST_BY_TERRAIN: readonly number[] = [
   MOVE_COST.tree,
 ];
 
+export interface Bush {
+  berries: number;
+  /** Тиков до появления следующей ягоды. */
+  regrow: number;
+}
+
 export class GameMap {
+  /** Ягодные кусты по индексу клетки (y * width + x). Проходимы. */
+  readonly bushes = new Map<number, Bush>();
+
   constructor(
     readonly width: number,
     readonly height: number,
@@ -146,5 +163,60 @@ export function generateMap(seed: number, width = MAP_SIZE, height = MAP_SIZE): 
       map.set(cx + dx, cy + dy, Terrain.Grass);
     }
   }
+  placeBushes(map, seed);
   return map;
+}
+
+/** Клетки, достижимые из центра по четырём направлениям. */
+function reachableFromCenter(map: GameMap): Uint8Array {
+  const w = map.width;
+  const seen = new Uint8Array(w * map.height);
+  const start = Math.floor(map.height / 2) * w + Math.floor(w / 2);
+  const stack = [start];
+  seen[start] = 1;
+  while (stack.length > 0) {
+    const i = stack.pop()!;
+    const x = i % w;
+    const y = (i - x) / w;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (map.isPassable(nx, ny) && !seen[ny * w + nx]) {
+        seen[ny * w + nx] = 1;
+        stack.push(ny * w + nx);
+      }
+    }
+  }
+  return seen;
+}
+
+/** Часть кустов — рядом со стартом (чтобы игра была играбельной), остальные — где угодно. */
+function placeBushes(map: GameMap, seed: number): void {
+  const rng = new Rng(seed ^ 0xb055);
+  const w = map.width;
+  const cx = Math.floor(w / 2);
+  const cy = Math.floor(map.height / 2);
+  const reach = reachableFromCenter(map);
+  const near: number[] = [];
+  const far: number[] = [];
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < w; x++) {
+      if (map.get(x, y) !== Terrain.Grass || !reach[y * w + x]) continue;
+      const d = Math.max(Math.abs(x - cx), Math.abs(y - cy));
+      if (d <= START_ZONE_RADIUS) continue;
+      (d <= 12 ? near : far).push(y * w + x);
+    }
+  }
+  const shuffle = (a: number[]) => {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = rng.int(0, i);
+      [a[i], a[j]] = [a[j]!, a[i]!];
+    }
+  };
+  shuffle(near);
+  shuffle(far);
+  const chosen = [...near.slice(0, BUSH_NEAR_START), ...[...near.slice(BUSH_NEAR_START), ...far].slice(0, BUSH_COUNT - BUSH_NEAR_START)];
+  for (const idx of chosen) {
+    map.bushes.set(idx, { berries: rng.int(2, BUSH_MAX_BERRIES), regrow: rng.int(1, BUSH_REGROW_TICKS) });
+  }
 }
