@@ -1,8 +1,14 @@
 import { DROP_SEARCH_RADIUS, STACK_MAX } from './balance';
 import type { GameMap } from './map';
 
-export type ItemKind = 'wood' | 'stone' | 'berries';
-export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries'];
+export type ItemKind = 'wood' | 'stone' | 'berries' | 'rice';
+export const ITEM_KINDS: readonly ItemKind[] = ['wood', 'stone', 'berries', 'rice'];
+
+/** Продукты, которые можно съесть сырыми. */
+export type FoodKind = 'berries' | 'rice';
+export function isFood(kind: ItemKind): kind is FoodKind {
+  return kind === 'berries' || kind === 'rice';
+}
 
 export interface ItemStack {
   kind: ItemKind;

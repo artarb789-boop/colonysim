@@ -25,6 +25,10 @@ export const MOVE_COST = {
   stone: Infinity,
   water: Infinity,
   tree: Infinity,
+  // постройки (стена и плита непроходимы)
+  door: 1.0,
+  bed: 1.2,
+  floor: 1.0,
 } as const;
 
 // ---------- Этап 2: поселенцы, нужды, работы ----------
@@ -83,3 +87,25 @@ export const NEEDS = {
   sleepWake: 90,
   relaxUntil: 60,
 } as const;
+
+// ---------- Этап 3a: строительство и огород ----------
+
+/** Постройки: материал, количество и время работы (тики при скорости 1.0). */
+export const BUILD = {
+  wall: { item: 'stone', count: 2, ticks: 120 },
+  door: { item: 'wood', count: 5, ticks: 100 },
+  floor: { item: 'wood', count: 1, ticks: 40 },
+  bed: { item: 'wood', count: 10, ticks: 150 },
+  stove: { item: 'stone', count: 8, ticks: 200 },
+} as const;
+
+/** Разборка: доля материалов, которая возвращается, и доля времени от постройки. */
+export const DECONSTRUCT = { refund: 0.5, timeFactor: 0.5 } as const;
+/** Сколько тиков строитель ждёт, пока клетку под стену освободят. */
+export const BUILD_WAIT_LIMIT = 400;
+
+/** Огород: рис растёт 2 игровых дня, при сборе даёт yield штук. */
+export const CROP = { growTicks: DAY_TICKS * 2, yield: 6, sowTicks: 60, reapTicks: 80 } as const;
+
+/** Сколько еды (0–100) даёт одна единица продукта. */
+export const FOOD_VALUE = { berries: 10, rice: 10 } as const;

@@ -1,14 +1,13 @@
+import { isBuildTool, type Tool } from '../input/tools';
+import { BUILD, NEEDS } from '../sim/balance';
 import { IMPLEMENTED_WORKS, type WorkType } from '../sim/jobs';
-import { NEEDS } from '../sim/balance';
-import type { Order, World } from '../sim/world';
+import type { World } from '../sim/world';
 import { ITEM_LABELS, NEED_LABELS, WORK_HINTS, WORK_LABELS, jobLabel, jobProgress } from './labels';
-
-export type OrderMode = Order;
 
 export interface HudCallbacks {
   onSelectPawn(id: number | null): void;
   onCenterPawn(id: number): void;
-  onOrderMode(mode: OrderMode | null): void;
+  onTool(tool: Tool | null): void;
   onPriority(pawnId: number, work: WorkType, value: number): void;
   onSave(): Promise<boolean>;
   onNewMap(): void;
@@ -30,12 +29,46 @@ function setText(e: HTMLElement, text: string): void {
   if (e.textContent !== text) e.textContent = text;
 }
 
-const ORDER_BUTTONS: { mode: OrderMode; label: string }[] = [
-  { mode: 'chop', label: 'Рубить' },
-  { mode: 'mine', label: 'Добывать' },
-  { mode: 'zone', label: 'Склад' },
-  { mode: 'erase', label: 'Стереть' },
+const ORDER_BUTTONS: { tool: Tool; label: string }[] = [
+  { tool: 'chop', label: 'Рубить' },
+  { tool: 'mine', label: 'Добывать' },
+  { tool: 'zone', label: 'Склад' },
+  { tool: 'erase', label: 'Стереть' },
 ];
+
+const BUILD_BUTTONS: { tool: Tool; label: string }[] = [
+  { tool: 'wall', label: 'Стена' },
+  { tool: 'door', label: 'Дверь' },
+  { tool: 'floor', label: 'Пол' },
+  { tool: 'bed', label: 'Кровать' },
+  { tool: 'stove', label: 'Плита' },
+  { tool: 'garden', label: 'Огород' },
+  { tool: 'deconstruct', label: 'Разобрать' },
+  { tool: 'erase', label: 'Стереть' },
+];
+
+const TOOL_HINTS: Record<string, string> = {
+  chop: 'Проведите по деревьям, чтобы пометить их на рубку',
+  mine: 'Проведите по камню, чтобы пометить его на добычу',
+  zone: 'Проведите по карте, чтобы отметить склад-зону',
+  garden: 'Проведите по карте, чтобы разметить огород — там вырастет рис',
+  deconstruct: 'Проведите по постройкам, чтобы разобрать их (вернётся половина материалов)',
+  erase: 'Проведите, чтобы убрать приказы, зоны и чертежи',
+  wall: 'Стена — проведите линию',
+  door: 'Дверь — тап или область',
+  floor: 'Пол — проведите область',
+  bed: 'Кровать — тап или область',
+  stove: 'Плита — тап или область',
+};
+
+function toolHint(tool: Tool): string {
+  const base = TOOL_HINTS[tool] ?? '';
+  if (isBuildTool(tool)) {
+    const c = BUILD[tool];
+    return `${base}. Нужно: ${ITEM_LABELS[c.item].toLowerCase()} ×${c.count}`;
+  }
+  return base;
+}
 
 const SIDE_BUTTONS = ['Колония', 'Работы', 'Строить', 'Приказы', 'Ещё'] as const;
 type Side = (typeof SIDE_BUTTONS)[number];
@@ -43,14 +76,15 @@ type Side = (typeof SIDE_BUTTONS)[number];
 /** Все DOM-панели поверх карты: боковая панель, карточка поселенца, ресурсы, предупреждения, окна, меню. */
 export class Hud {
   private selectedId: number | null = null;
-  private orderMode: OrderMode | null = null;
-  private ordersOpen = false;
+  private tool: Tool | null = null;
+  private bar: 'orders' | 'build' | null = null;
   private modalRender: (() => void) | null = null;
   private lastUpdate = 0;
 
   private readonly side = new Map<Side, HTMLButtonElement>();
   private readonly orderBar = el('div', 'orders');
-  private readonly orderBtns = new Map<OrderMode, HTMLButtonElement>();
+  private readonly buildBar = el('div', 'orders');
+  private readonly toolBtns: { tool: Tool; btn: HTMLButtonElement }[] = [];
   private readonly orderHint = el('div', 'orders__hint');
   private readonly resources = el('div', 'resources');
   private readonly resEls = new Map<string, HTMLSpanElement>();
@@ -77,7 +111,7 @@ export class Hud {
     private readonly cb: HudCallbacks,
   ) {
     this.buildSidebar(root);
-    this.buildOrders(root);
+    this.buildToolbars(root);
     this.buildResources(root);
     root.append(this.warnings);
     this.buildCard(root);
@@ -110,58 +144,54 @@ export class Hud {
     this.hideMenu();
     if (label === 'Колония') this.openColony();
     else if (label === 'Работы') this.openWorkTable();
-    else if (label === 'Строить') this.showToast('Строительство появится в Этапе 3');
-    else if (label === 'Приказы') this.setOrdersOpen(!this.ordersOpen);
+    else if (label === 'Строить') this.setBar(this.bar === 'build' ? null : 'build');
+    else if (label === 'Приказы') this.setBar(this.bar === 'orders' ? null : 'orders');
     else this.openMore();
   }
 
-  private buildOrders(root: HTMLElement): void {
-    for (const { mode, label } of ORDER_BUTTONS) {
-      const b = el('button', 'orders__btn', label);
-      b.type = 'button';
-      b.addEventListener('click', () => this.setOrderMode(this.orderMode === mode ? null : mode));
-      this.orderBar.append(b);
-      this.orderBtns.set(mode, b);
-    }
-    const close = el('button', 'orders__btn orders__close', '✕');
-    close.type = 'button';
-    close.setAttribute('aria-label', 'Закрыть приказы');
-    close.addEventListener('click', () => this.setOrdersOpen(false));
-    this.orderBar.append(close);
-    this.orderBar.hidden = true;
-    this.orderHint.hidden = true;
-    root.append(this.orderBar, this.orderHint);
-  }
-
-  private setOrdersOpen(open: boolean): void {
-    this.ordersOpen = open;
-    this.orderBar.hidden = !open;
-    document.body.classList.toggle('orders-open', open);
-    this.side.get('Приказы')!.classList.toggle('active', open);
-    if (!open) this.setOrderMode(null);
-    else this.updateHint();
-  }
-
-  private setOrderMode(mode: OrderMode | null): void {
-    this.orderMode = mode;
-    for (const [m, b] of this.orderBtns) b.classList.toggle('active', m === mode);
-    this.updateHint();
-    this.cb.onOrderMode(mode);
-  }
-
-  private updateHint(): void {
-    const hints: Record<OrderMode, string> = {
-      chop: 'Проведите по деревьям, чтобы пометить их на рубку',
-      mine: 'Проведите по камню, чтобы пометить его на добычу',
-      zone: 'Проведите по карте, чтобы отметить склад-зону',
-      erase: 'Проведите, чтобы убрать приказы и склад-зону',
+  private buildToolbars(root: HTMLElement): void {
+    const fill = (bar: HTMLElement, buttons: { tool: Tool; label: string }[]) => {
+      for (const { tool, label } of buttons) {
+        const b = el('button', 'orders__btn', label);
+        b.type = 'button';
+        b.addEventListener('click', () => this.setTool(this.tool === tool ? null : tool));
+        bar.append(b);
+        this.toolBtns.push({ tool, btn: b });
+      }
+      const close = el('button', 'orders__btn orders__close', '✕');
+      close.type = 'button';
+      close.setAttribute('aria-label', 'Закрыть панель');
+      close.addEventListener('click', () => this.setBar(null));
+      bar.append(close);
+      bar.hidden = true;
     };
-    this.orderHint.hidden = !this.ordersOpen;
-    this.orderHint.textContent = this.orderMode ? hints[this.orderMode] : 'Выберите приказ';
+    fill(this.orderBar, ORDER_BUTTONS);
+    fill(this.buildBar, BUILD_BUTTONS);
+    this.orderHint.hidden = true;
+    root.append(this.orderBar, this.buildBar, this.orderHint);
+  }
+
+  private setBar(bar: 'orders' | 'build' | null): void {
+    this.bar = bar;
+    this.orderBar.hidden = bar !== 'orders';
+    this.buildBar.hidden = bar !== 'build';
+    document.body.classList.toggle('orders-open', bar !== null);
+    this.side.get('Приказы')!.classList.toggle('active', bar === 'orders');
+    this.side.get('Строить')!.classList.toggle('active', bar === 'build');
+    this.setTool(null);
+  }
+
+  private setTool(tool: Tool | null): void {
+    this.tool = tool;
+    const bar = this.bar === 'build' ? this.buildBar : this.orderBar;
+    for (const { tool: t, btn } of this.toolBtns) btn.classList.toggle('active', t === tool && bar.contains(btn));
+    this.orderHint.hidden = this.bar === null;
+    this.orderHint.textContent = tool ? toolHint(tool) : this.bar === null ? '' : 'Выберите, что делать';
+    this.cb.onTool(tool);
   }
 
   private buildResources(root: HTMLElement): void {
-    for (const kind of ['wood', 'stone', 'berries'] as const) {
+    for (const kind of ['wood', 'stone', 'berries', 'rice'] as const) {
       const item = el('div', 'resources__item');
       item.append(el('span', `resources__dot resources__dot--${kind}`), el('span', 'resources__label', ITEM_LABELS[kind]));
       const v = el('span', 'resources__value mono', '0');
@@ -425,6 +455,7 @@ export class Hud {
     setText(this.resEls.get('wood')!, String(stock.wood));
     setText(this.resEls.get('stone')!, String(stock.stone));
     setText(this.resEls.get('berries')!, String(stock.berries));
+    setText(this.resEls.get('rice')!, String(stock.rice));
 
     this.updateWarnings();
 
@@ -435,7 +466,7 @@ export class Hud {
       c.avatar.textContent = p.name.charAt(0);
       c.avatar.style.setProperty('--pawn', p.color);
       setText(c.task, jobLabel(p));
-      const prog = jobProgress(p);
+      const prog = jobProgress(this.world, p);
       c.progress.hidden = prog === null;
       if (prog !== null) (c.progress.firstElementChild as HTMLElement).style.width = `${Math.round(prog * 100)}%`;
       for (const key of ['food', 'sleep', 'rest'] as const) {

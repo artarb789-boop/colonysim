@@ -1,14 +1,22 @@
 import {
+  BUILD,
+  BUSH_MAX_BERRIES,
+  BUSH_REGROW_TICKS,
+  CROP,
   DAY_START_HOUR,
   DAY_TICKS,
   MAP_SIZE,
   NEEDS,
   PAWN_COUNT,
   START_BERRIES,
-  BUSH_MAX_BERRIES,
-  BUSH_REGROW_TICKS,
   THINK_COOLDOWN,
 } from './balance';
+import {
+  STRUCTURE_OF,
+  blocksMovement,
+  type Blueprint,
+  type BuildKind,
+} from './build';
 import { ItemStore, type ItemKind } from './items';
 import {
   Layer,
@@ -16,6 +24,7 @@ import {
   cancelJob,
   planCritical,
   planGoto,
+  planStepOff,
   planUrgent,
   planWork,
   runJob,
@@ -23,12 +32,13 @@ import {
   type LayerId,
   type WorkType,
 } from './jobs';
-import { GameMap, Terrain, generateMap } from './map';
+import { GameMap, Structure, Terrain, generateMap } from './map';
 import { createPawn, type Pawn } from './pawn';
+import type { Point } from './pathfinding';
 import { Rng } from './rng';
 
-export type Designation = 'chop' | 'mine';
-export type Order = 'chop' | 'mine' | 'zone' | 'erase';
+export type Designation = 'chop' | 'mine' | 'deconstruct';
+export type Order = 'chop' | 'mine' | 'zone' | 'garden' | 'deconstruct' | 'erase';
 
 export interface WorldOptions {
   pawnCount?: number;
@@ -46,15 +56,22 @@ const PAWN_DEFS = [
 ] as const;
 const START_OFFSETS: readonly (readonly [number, number])[] = [[0, 0], [-1, 1], [1, 1], [0, -1]];
 
+/** Множитель ключа резервирования (слоёв не больше 8). */
+const LAYER_SLOTS = 8;
+
 export class World {
   readonly map: GameMap;
   readonly items: ItemStore;
   readonly pawns: Pawn[] = [];
-  /** Приказы «рубить» и «добывать» по индексу клетки. */
+  /** Приказы «рубить», «добывать», «разобрать» по индексу клетки. */
   readonly designations = new Map<number, Designation>();
   /** Клетки склад-зоны. */
   readonly zone = new Set<number>();
-  /** Клетки, у которых сменилась местность, — рендер перерисует их. */
+  /** Клетки огорода. */
+  readonly garden = new Set<number>();
+  /** Чертежи будущих построек по индексу клетки. */
+  readonly blueprints = new Map<number, Blueprint>();
+  /** Клетки, у которых изменился вид (местность, постройки), — рендер перерисует их. */
   readonly dirty: number[] = [];
   tickCount = 0;
   private readonly ai: boolean;
@@ -81,7 +98,7 @@ export class World {
   // ---------- резервирование ----------
 
   private key(layer: LayerId, idx: number): number {
-    return idx * 4 + layer;
+    return idx * LAYER_SLOTS + layer;
   }
 
   isFree(layer: LayerId, idx: number, pawnId: number): boolean {
@@ -115,6 +132,15 @@ export class World {
     this.dirty.push(idx);
   }
 
+  idxOf(x: number, y: number): number {
+    return y * this.map.width + x;
+  }
+
+  pointOf(idx: number): Point {
+    const x = idx % this.map.width;
+    return { x, y: (idx - x) / this.map.width };
+  }
+
   // ---------- команды игрока ----------
 
   /** Приказ «иди сюда». Возвращает false, если цель непроходима или недостижима. */
@@ -132,6 +158,11 @@ export class World {
     if (pawn) pawn.priorities[work] = Math.max(0, Math.min(4, Math.round(value)));
   }
 
+  /** Есть ли в клетке что разбирать: постройка или пол. */
+  hasBuilt(idx: number): boolean {
+    return this.map.structure[idx] !== Structure.None || this.map.floor[idx] !== 0;
+  }
+
   /** Применяет приказ к прямоугольнику клеток (границы включительно). Возвращает число изменённых клеток. */
   applyOrder(order: Order, x0: number, y0: number, x1: number, y1: number): number {
     const w = this.map.width;
@@ -140,27 +171,131 @@ export class World {
       for (let x = Math.max(0, Math.min(x0, x1)); x <= Math.min(w - 1, Math.max(x0, x1)); x++) {
         const idx = y * w + x;
         const t = this.map.get(x, y);
-        if (order === 'chop') {
-          if (t === Terrain.Tree && !this.designations.has(idx)) {
-            this.designations.set(idx, 'chop');
-            changed++;
+        const buildable = (t === Terrain.Grass || t === Terrain.Dirt) && this.map.isPassable(x, y);
+        switch (order) {
+          case 'chop':
+            if (t === Terrain.Tree && !this.designations.has(idx)) {
+              this.designations.set(idx, 'chop');
+              changed++;
+            }
+            break;
+          case 'mine':
+            if (t === Terrain.Stone && !this.designations.has(idx)) {
+              this.designations.set(idx, 'mine');
+              changed++;
+            }
+            break;
+          case 'deconstruct':
+            if (this.hasBuilt(idx) && !this.designations.has(idx)) {
+              this.designations.set(idx, 'deconstruct');
+              changed++;
+            }
+            break;
+          case 'zone':
+            if (buildable && !this.map.bushes.has(idx) && !this.zone.has(idx)) {
+              this.garden.delete(idx);
+              this.zone.add(idx);
+              changed++;
+            }
+            break;
+          case 'garden':
+            if (buildable && !this.map.bushes.has(idx) && !this.garden.has(idx) && this.map.structure[idx] === Structure.None) {
+              this.zone.delete(idx);
+              this.garden.add(idx);
+              changed++;
+            }
+            break;
+          case 'erase': {
+            let did = false;
+            if (this.designations.delete(idx)) did = true;
+            if (this.zone.delete(idx)) did = true;
+            if (this.garden.delete(idx)) did = true;
+            if (this.cancelBlueprint(idx)) did = true;
+            if (did) changed++;
+            break;
           }
-        } else if (order === 'mine') {
-          if (t === Terrain.Stone && !this.designations.has(idx)) {
-            this.designations.set(idx, 'mine');
-            changed++;
-          }
-        } else if (order === 'zone') {
-          if (this.map.isPassable(x, y) && !this.zone.has(idx)) {
-            this.zone.add(idx);
-            changed++;
-          }
-        } else {
-          if (this.designations.delete(idx) || this.zone.delete(idx)) changed++;
         }
       }
     }
     return changed;
+  }
+
+  // ---------- строительство ----------
+
+  /** Можно ли поставить чертёж такой постройки в клетку. */
+  canPlace(kind: BuildKind, x: number, y: number): boolean {
+    if (!this.map.inBounds(x, y)) return false;
+    const t = this.map.get(x, y);
+    if (t !== Terrain.Grass && t !== Terrain.Dirt) return false;
+    const idx = this.idxOf(x, y);
+    if (this.blueprints.has(idx) || this.map.bushes.has(idx) || this.map.crops.has(idx) || this.items.stacks.has(idx)) return false;
+    if (kind === 'floor') return this.map.floor[idx] === 0;
+    return this.map.structure[idx] === Structure.None;
+  }
+
+  /** Ставит чертежи на подходящие клетки. Возвращает, сколько поставлено. */
+  placeBlueprints(kind: BuildKind, cells: readonly Point[]): number {
+    let placed = 0;
+    for (const c of cells) {
+      if (!this.canPlace(kind, c.x, c.y)) continue;
+      this.blueprints.set(this.idxOf(c.x, c.y), { kind, delivered: 0, work: 0 });
+      placed++;
+    }
+    return placed;
+  }
+
+  /** Убирает чертёж, возвращая подвезённые материалы. */
+  cancelBlueprint(idx: number): boolean {
+    const bp = this.blueprints.get(idx);
+    if (!bp) return false;
+    this.blueprints.delete(idx);
+    if (bp.delivered > 0) {
+      const { x, y } = this.pointOf(idx);
+      this.items.drop(BUILD[bp.kind].item, bp.delivered, x, y);
+    }
+    return true;
+  }
+
+  /** Превращает готовый чертёж в постройку. */
+  completeBlueprint(idx: number): void {
+    const bp = this.blueprints.get(idx);
+    if (!bp) return;
+    this.blueprints.delete(idx);
+    if (bp.kind === 'floor') this.map.floor[idx] = 1;
+    else this.map.structure[idx] = STRUCTURE_OF[bp.kind];
+    if (blocksMovement(bp.kind)) {
+      this.zone.delete(idx);
+      this.garden.delete(idx);
+      this.map.crops.delete(idx);
+      const stack = this.items.stacks.get(idx);
+      if (stack) {
+        this.items.stacks.delete(idx);
+        const { x, y } = this.pointOf(idx);
+        this.items.drop(stack.kind, stack.count, x, y);
+      }
+    }
+    this.markDirty(idx);
+  }
+
+  /** Разбирает постройку (если нет — пол) и возвращает часть материалов. */
+  removeBuilt(idx: number, refund: number): void {
+    const id = this.map.structure[idx]!;
+    let kind: BuildKind | null = null;
+    if (id !== Structure.None) {
+      this.map.structure[idx] = Structure.None;
+      kind = id === Structure.Wall ? 'wall' : id === Structure.Door ? 'door' : id === Structure.Bed ? 'bed' : 'stove';
+    } else if (this.map.floor[idx]) {
+      this.map.floor[idx] = 0;
+      kind = 'floor';
+    }
+    if (kind) {
+      const n = Math.floor(BUILD[kind].count * refund);
+      if (n > 0) {
+        const { x, y } = this.pointOf(idx);
+        this.items.drop(BUILD[kind].item, n, x, y);
+      }
+    }
+    this.markDirty(idx);
   }
 
   // ---------- запросы ----------
@@ -179,6 +314,7 @@ export class World {
       wood: this.items.total('wood', inZone),
       stone: this.items.total('stone', inZone),
       berries: this.items.total('berries', inZone),
+      rice: this.items.total('rice', inZone),
     };
   }
 
@@ -197,6 +333,7 @@ export class World {
         b.regrow = BUSH_REGROW_TICKS;
       }
     }
+    for (const c of this.map.crops.values()) if (c.growth < CROP.growTicks) c.growth++;
     for (const p of this.pawns) {
       p.prevX = p.x;
       p.prevY = p.y;
@@ -229,7 +366,7 @@ export class World {
         p.thinkCooldown--;
         return;
       }
-      const plan = planUrgent(this, p) ?? planWork(this, p);
+      const plan = planStepOff(this, p) ?? planUrgent(this, p) ?? planWork(this, p);
       if (plan) startJob(this, p, plan);
       else p.thinkCooldown = THINK_COOLDOWN;
       return;

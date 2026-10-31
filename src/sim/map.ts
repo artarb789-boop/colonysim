@@ -20,6 +20,15 @@ const COST_BY_TERRAIN: readonly number[] = [
   MOVE_COST.tree,
 ];
 
+/** Постройки поверх местности (одна на клетку). Пол хранится отдельным слоем. */
+export const Structure = { None: 0, Wall: 1, Door: 2, Bed: 3, Stove: 4 } as const;
+export type StructureId = (typeof Structure)[keyof typeof Structure];
+
+export interface Crop {
+  /** Тиков роста; созрел при growth >= CROP.growTicks. */
+  growth: number;
+}
+
 export interface Bush {
   berries: number;
   /** Тиков до появления следующей ягоды. */
@@ -29,12 +38,21 @@ export interface Bush {
 export class GameMap {
   /** Ягодные кусты по индексу клетки (y * width + x). Проходимы. */
   readonly bushes = new Map<number, Bush>();
+  /** Посевы на огороде по индексу клетки. */
+  readonly crops = new Map<number, Crop>();
+  /** Постройки: Structure.* по индексу клетки. */
+  readonly structure: Uint8Array;
+  /** Пол: 0 — нет, 1 — есть. */
+  readonly floor: Uint8Array;
 
   constructor(
     readonly width: number,
     readonly height: number,
     readonly cells: Uint8Array,
-  ) {}
+  ) {
+    this.structure = new Uint8Array(width * height);
+    this.floor = new Uint8Array(width * height);
+  }
 
   inBounds(x: number, y: number): boolean {
     return x >= 0 && y >= 0 && x < this.width && y < this.height;
@@ -51,7 +69,19 @@ export class GameMap {
   /** Стоимость прохода по клетке; Infinity — нельзя (или вне карты). */
   moveCost(x: number, y: number): number {
     if (!this.inBounds(x, y)) return Infinity;
-    return COST_BY_TERRAIN[this.get(x, y)]!;
+    const i = y * this.width + x;
+    const base = COST_BY_TERRAIN[this.cells[i]!]!;
+    if (base === Infinity) return Infinity;
+    switch (this.structure[i]) {
+      case Structure.Wall:
+      case Structure.Stove:
+        return Infinity;
+      case Structure.Door:
+        return MOVE_COST.door;
+      case Structure.Bed:
+        return MOVE_COST.bed;
+    }
+    return this.floor[i] ? Math.min(base, MOVE_COST.floor) : base;
   }
 
   isPassable(x: number, y: number): boolean {

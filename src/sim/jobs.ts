@@ -1,20 +1,25 @@
 import {
-  BERRY_FOOD,
   BERRY_STOCK_TARGET,
+  BUILD,
+  BUILD_WAIT_LIMIT,
   BUSH_REGROW_TICKS,
   CARRY_MAX,
+  CROP,
+  DECONSTRUCT,
+  FOOD_VALUE,
   NEEDS,
   STONE_PER_ROCK,
   WOOD_PER_TREE,
   WORK_TICKS,
 } from './balance';
-import type { ItemKind } from './items';
-import { Terrain } from './map';
+import { blocksMovement, kindOfStructure, type BuildKind } from './build';
+import { isFood, type ItemKind } from './items';
+import { Structure, Terrain } from './map';
 import { findPath, findPathToAny, pathCost, type Point } from './pathfinding';
 import { originOf, stepMovement, workSpeed, type Pawn, type SkillId } from './pawn';
 import type { World } from './world';
 
-/** 11 типов работ из ТЗ (в таблице приоритетов). Реализованы пока три: растения, добыча, переноска. */
+/** 11 типов работ из ТЗ (в таблице приоритетов). Реализованы: растения, добыча, строительство, переноска. */
 export type WorkType =
   | 'firefighting'
   | 'doctor'
@@ -30,27 +35,42 @@ export type WorkType =
 export const WORK_TYPES: readonly WorkType[] = [
   'firefighting', 'doctor', 'cooking', 'hunting', 'construction', 'plants', 'mining', 'crafting', 'hauling', 'cleaning', 'research',
 ];
-export const IMPLEMENTED_WORKS: readonly WorkType[] = ['plants', 'mining', 'hauling'];
+export const IMPLEMENTED_WORKS: readonly WorkType[] = ['construction', 'plants', 'mining', 'hauling'];
 
-export type JobKind = 'chop' | 'mine' | 'harvest' | 'haul' | 'eat' | 'sleep' | 'relax' | 'goto';
+export type JobKind =
+  | 'chop'
+  | 'mine'
+  | 'harvest'
+  | 'sow'
+  | 'reap'
+  | 'haul'
+  | 'deliver'
+  | 'build'
+  | 'deconstruct'
+  | 'eat'
+  | 'sleep'
+  | 'relax'
+  | 'goto';
 type Phase = 'move' | 'act' | 'move2' | 'act2';
 
 export interface Job {
   kind: JobKind;
   phase: Phase;
-  /** Клетка объекта (дерево, камень, куст, стопка) или точка назначения для «иди сюда». */
+  /** Клетка объекта (дерево, камень, куст, стопка, чертёж…) или точка назначения для «иди сюда». */
   target: Point;
-  /** Клетка склада для переноски. */
+  /** Куда нести: клетка склада (haul) или чертежа (deliver). */
   dest?: Point;
   /** Для еды: откуда едим. */
   source?: 'stack' | 'bush';
   progress: number;
   /** Длительность действия в тиках; 0 — пока не выполнится условие (сон, отдых). */
   duration: number;
+  /** Сколько тиков строитель ждёт освобождения клетки. */
+  wait?: number;
 }
 
 /** Слои резервирования: один объект — один исполнитель. */
-export const Layer = { Designation: 0, Bush: 1, Item: 2, Dest: 3 } as const;
+export const Layer = { Designation: 0, Bush: 1, Item: 2, Dest: 3, Blueprint: 4, Crop: 5 } as const;
 export type LayerId = (typeof Layer)[keyof typeof Layer];
 
 export interface Plan {
@@ -61,7 +81,9 @@ export interface Plan {
 }
 
 /** Задачи, которые можно прервать срочной нуждой. */
-export const WORK_JOB_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['chop', 'mine', 'harvest', 'haul']);
+export const WORK_JOB_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
+  'chop', 'mine', 'harvest', 'sow', 'reap', 'haul', 'deliver', 'build', 'deconstruct',
+]);
 
 const NEIGHBORS: readonly (readonly [number, number])[] = [
   [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1],
@@ -78,8 +100,7 @@ function idxOf(world: World, p: Point): number {
 }
 
 function pointOf(world: World, idx: number): Point {
-  const x = idx % world.map.width;
-  return { x, y: (idx - x) / world.map.width };
+  return world.pointOf(idx);
 }
 
 /** Путь от текущей позиции поселенца до ближайшей из целей (с учётом недоделанного шага). */
@@ -126,9 +147,10 @@ function adjacentPassable(world: World, p: Point): Point[] {
   return out;
 }
 
-// ---------- планирование ----------
+// ---------- планирование: растения, добыча, переноска ----------
 
-function planDesignation(world: World, pawn: Pawn, kind: 'chop' | 'mine'): Plan | null {
+/** Приказы на клетку: рубка, добыча, разборка. Встают рядом (или на проходимую клетку). */
+function planDesignation(world: World, pawn: Pawn, kind: 'chop' | 'mine' | 'deconstruct'): Plan | null {
   const cands: number[] = [];
   for (const [idx, d] of world.designations) {
     if (d === kind && world.isFree(Layer.Designation, idx, pawn.id)) cands.push(idx);
@@ -139,7 +161,9 @@ function planDesignation(world: World, pawn: Pawn, kind: 'chop' | 'mine'): Plan 
     originOf(pawn),
     (idx) => {
       const target = pointOf(world, idx);
-      const r = route(world, pawn, adjacentPassable(world, target));
+      const goals = adjacentPassable(world, target);
+      if (kind === 'deconstruct' && world.map.isPassable(target.x, target.y)) goals.push(target);
+      const r = route(world, pawn, goals);
       if (!r) return null;
       return {
         job: { kind, phase: 'move', target, progress: 0, duration: 0 },
@@ -175,12 +199,61 @@ function planHarvest(world: World, pawn: Pawn): Plan | null {
   );
 }
 
+/** Посев на пустых клетках огорода. */
+function planSow(world: World, pawn: Pawn): Plan | null {
+  const cands: number[] = [];
+  for (const idx of world.garden) {
+    if (world.map.crops.has(idx) || world.blueprints.has(idx) || world.map.structure[idx] !== Structure.None) continue;
+    if (world.isFree(Layer.Crop, idx, pawn.id)) cands.push(idx);
+  }
+  return bestOf(
+    cands,
+    (idx) => pointOf(world, idx),
+    originOf(pawn),
+    (idx) => {
+      const target = pointOf(world, idx);
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'sow', phase: 'move', target, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Crop, idx]],
+      };
+    },
+  );
+}
+
+/** Сбор созревшего урожая. */
+function planReap(world: World, pawn: Pawn): Plan | null {
+  const cands: number[] = [];
+  for (const [idx, c] of world.map.crops) {
+    if (c.growth >= CROP.growTicks && world.isFree(Layer.Crop, idx, pawn.id)) cands.push(idx);
+  }
+  return bestOf(
+    cands,
+    (idx) => pointOf(world, idx),
+    originOf(pawn),
+    (idx) => {
+      const target = pointOf(world, idx);
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'reap', phase: 'move', target, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Crop, idx]],
+      };
+    },
+  );
+}
+
 /** Ближайшая клетка склада, куда поместится хоть что-то из стопки. */
 function pickDest(world: World, pawn: Pawn, from: Point, kind: ItemKind): number | null {
   let best: number | null = null;
   let bestD = Infinity;
   for (const idx of world.zone) {
-    if (world.items.roomAt(idx, kind) <= 0 || !world.isFree(Layer.Dest, idx, pawn.id)) continue;
+    if (world.blueprints.has(idx) || world.items.roomAt(idx, kind) <= 0 || !world.isFree(Layer.Dest, idx, pawn.id)) continue;
     const p = pointOf(world, idx);
     const d = octile(p.x - from.x, p.y - from.y);
     if (d < bestD) {
@@ -220,6 +293,73 @@ function planHaul(world: World, pawn: Pawn): Plan | null {
   );
 }
 
+// ---------- планирование: строительство ----------
+
+/** Подвоз материала на чертёж: берём ближайшую свободную стопку нужного вида. */
+function planDeliver(world: World, pawn: Pawn): Plan | null {
+  const cands: number[] = [];
+  for (const [idx, bp] of world.blueprints) {
+    if (bp.delivered < BUILD[bp.kind].count && world.isFree(Layer.Blueprint, idx, pawn.id)) cands.push(idx);
+  }
+  const o = originOf(pawn);
+  return bestOf(
+    cands,
+    (idx) => pointOf(world, idx),
+    o,
+    (idx) => {
+      const bp = world.blueprints.get(idx)!;
+      const item = BUILD[bp.kind].item;
+      const dest = pointOf(world, idx);
+      let best = -1;
+      let bestD = Infinity;
+      for (const [sidx, s] of world.items.stacks) {
+        if (s.kind !== item || s.count <= 0 || !world.isFree(Layer.Item, sidx, pawn.id)) continue;
+        const p = pointOf(world, sidx);
+        const d = octile(p.x - o.x, p.y - o.y) + octile(p.x - dest.x, p.y - dest.y);
+        if (d < bestD) {
+          bestD = d;
+          best = sidx;
+        }
+      }
+      if (best < 0) return null;
+      const target = pointOf(world, best);
+      if (!findPath(world.map, target.x, target.y, dest.x, dest.y)) return null;
+      const r = route(world, pawn, [target]);
+      if (!r) return null;
+      return {
+        job: { kind: 'deliver', phase: 'move', target, dest, progress: 0, duration: 0 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Item, best], [Layer.Blueprint, idx]],
+      };
+    },
+  );
+}
+
+/** Постройка по чертежу, на который уже привезён весь материал. */
+function planBuild(world: World, pawn: Pawn): Plan | null {
+  const cands: number[] = [];
+  for (const [idx, bp] of world.blueprints) {
+    if (bp.delivered >= BUILD[bp.kind].count && world.isFree(Layer.Blueprint, idx, pawn.id)) cands.push(idx);
+  }
+  return bestOf(
+    cands,
+    (idx) => pointOf(world, idx),
+    originOf(pawn),
+    (idx) => {
+      const target = pointOf(world, idx);
+      const r = route(world, pawn, adjacentPassable(world, target));
+      if (!r) return null;
+      return {
+        job: { kind: 'build', phase: 'move', target, progress: 0, duration: 1 },
+        path: r.path,
+        cost: r.cost,
+        reserve: [[Layer.Blueprint, idx]],
+      };
+    },
+  );
+}
+
 function cheaper(a: Plan | null, b: Plan | null): Plan | null {
   if (!a) return b;
   if (!b) return a;
@@ -227,8 +367,10 @@ function cheaper(a: Plan | null, b: Plan | null): Plan | null {
 }
 
 const PLANNERS: Partial<Record<WorkType, (world: World, pawn: Pawn) => Plan | null>> = {
-  plants: (w, p) => cheaper(planDesignation(w, p, 'chop'), planHarvest(w, p)),
+  plants: (w, p) => cheaper(cheaper(planDesignation(w, p, 'chop'), planHarvest(w, p)), cheaper(planReap(w, p), planSow(w, p))),
   mining: (w, p) => planDesignation(w, p, 'mine'),
+  construction: (w, p) =>
+    cheaper(cheaper(planBuild(w, p), planDeliver(w, p)), planDesignation(w, p, 'deconstruct')),
   hauling: planHaul,
 };
 
@@ -245,10 +387,12 @@ export function planWork(world: World, pawn: Pawn): Plan | null {
   return null;
 }
 
+// ---------- планирование: нужды ----------
+
 export function planEat(world: World, pawn: Pawn): Plan | null {
   const stacks: number[] = [];
   for (const [idx, s] of world.items.stacks) {
-    if (s.kind === 'berries' && s.count > 0 && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
+    if (isFood(s.kind) && s.count > 0 && world.isFree(Layer.Item, idx, pawn.id)) stacks.push(idx);
   }
   const fromStack = bestOf(
     stacks,
@@ -336,6 +480,37 @@ export function planGoto(world: World, pawn: Pawn, x: number, y: number): Plan |
   };
 }
 
+/** Праздный поселенец стоит на клетке, где скоро будет стена или плита, — отходит в сторону. */
+export function planStepOff(world: World, pawn: Pawn): Plan | null {
+  if (pawn.t > 0) return null;
+  const here = world.blueprints.get(pawn.cy * world.map.width + pawn.cx);
+  if (!here || !blocksMovement(here.kind)) return null;
+  const goals: Point[] = [];
+  for (let r = 1; r <= 4 && goals.length === 0; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = pawn.cx + dx;
+        const y = pawn.cy + dy;
+        if (world.map.isPassable(x, y) && !world.blueprints.has(y * world.map.width + x)) goals.push({ x, y });
+      }
+    }
+  }
+  return goals.length === 0 ? null : planGotoAny(world, pawn, goals);
+}
+
+function planGotoAny(world: World, pawn: Pawn, goals: Point[]): Plan | null {
+  const r = route(world, pawn, goals);
+  if (!r) return null;
+  const end = r.path.length > 0 ? r.path[r.path.length - 1]! : originOf(pawn);
+  return {
+    job: { kind: 'goto', phase: 'move', target: end, progress: 0, duration: 0 },
+    path: r.path,
+    cost: r.cost,
+    reserve: [],
+  };
+}
+
 // ---------- запуск и завершение ----------
 
 export function startJob(world: World, pawn: Pawn, plan: Plan): void {
@@ -367,8 +542,23 @@ function stillValid(world: World, job: Job): boolean {
       return world.designations.get(idx) === 'chop' && world.map.get(job.target.x, job.target.y) === Terrain.Tree;
     case 'mine':
       return world.designations.get(idx) === 'mine' && world.map.get(job.target.x, job.target.y) === Terrain.Stone;
+    case 'deconstruct':
+      return world.designations.get(idx) === 'deconstruct' && world.hasBuilt(idx);
     case 'harvest':
       return (world.map.bushes.get(idx)?.berries ?? 0) >= 1;
+    case 'sow':
+      return world.garden.has(idx) && !world.map.crops.has(idx) && !world.blueprints.has(idx) && world.map.structure[idx] === Structure.None;
+    case 'reap':
+      return (world.map.crops.get(idx)?.growth ?? 0) >= CROP.growTicks;
+    case 'build': {
+      const bp = world.blueprints.get(idx);
+      return !!bp && bp.delivered >= BUILD[bp.kind].count;
+    }
+    case 'deliver': {
+      if (!world.blueprints.has(idxOf(world, job.dest!))) return false;
+      if (job.phase === 'move2' || job.phase === 'act2') return true;
+      return (world.items.stacks.get(idx)?.count ?? 0) > 0;
+    }
     case 'haul':
       if (job.phase === 'move2' || job.phase === 'act2') return true;
       return (world.items.stacks.get(idx)?.count ?? 0) > 0;
@@ -382,7 +572,26 @@ function stillValid(world: World, job: Job): boolean {
 }
 
 function skillOf(kind: JobKind): SkillId | null {
-  return kind === 'chop' || kind === 'harvest' ? 'plants' : kind === 'mine' ? 'mining' : null;
+  switch (kind) {
+    case 'chop':
+    case 'harvest':
+    case 'sow':
+    case 'reap':
+      return 'plants';
+    case 'mine':
+      return 'mining';
+    case 'build':
+    case 'deliver':
+    case 'deconstruct':
+      return 'construction';
+    default:
+      return null;
+  }
+}
+
+/** Что стоит в клетке для разборки: постройка, иначе пол. */
+function builtKindAt(world: World, idx: number): BuildKind | null {
+  return kindOfStructure(world.map.structure[idx]!) ?? (world.map.floor[idx] ? 'floor' : null);
 }
 
 function arrive(world: World, pawn: Pawn, job: Job): void {
@@ -407,7 +616,27 @@ function arrive(world: World, pawn: Pawn, job: Job): void {
       job.duration = ((bush?.berries ?? 1) * WORK_TICKS.berry) / speed;
       return;
     }
+    case 'sow':
+      job.phase = 'act';
+      job.duration = CROP.sowTicks / speed;
+      return;
+    case 'reap':
+      job.phase = 'act';
+      job.duration = CROP.reapTicks / speed;
+      return;
+    case 'build':
+      job.phase = 'act';
+      job.duration = 1;
+      job.wait = 0;
+      return;
+    case 'deconstruct': {
+      const kind = builtKindAt(world, idxOf(world, job.target));
+      job.phase = 'act';
+      job.duration = kind ? (BUILD[kind].ticks * DECONSTRUCT.timeFactor) / speed : 1;
+      return;
+    }
     case 'haul':
+    case 'deliver':
       if (job.phase === 'move') {
         job.phase = 'act';
         job.duration = WORK_TICKS.pickup;
@@ -446,6 +675,11 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
       world.items.drop('stone', STONE_PER_ROCK, x, y);
       endJob(world, pawn);
       return;
+    case 'deconstruct':
+      world.removeBuilt(idx, DECONSTRUCT.refund);
+      world.designations.delete(idx);
+      endJob(world, pawn);
+      return;
     case 'harvest': {
       const bush = world.map.bushes.get(idx);
       if (bush && bush.berries > 0) {
@@ -457,26 +691,42 @@ function finishAction(world: World, pawn: Pawn, job: Job): void {
       endJob(world, pawn);
       return;
     }
+    case 'sow':
+      world.map.crops.set(idx, { growth: 0 });
+      endJob(world, pawn);
+      return;
+    case 'reap':
+      world.map.crops.delete(idx);
+      world.items.drop('rice', CROP.yield, x, y);
+      endJob(world, pawn);
+      return;
     case 'eat': {
-      const need = Math.max(1, Math.ceil((NEEDS.eatTarget - pawn.needs.food) / BERRY_FOOD));
       let eaten = 0;
+      let value: number = FOOD_VALUE.berries;
       if (job.source === 'bush') {
         const bush = world.map.bushes.get(idx);
         if (bush) {
+          const need = Math.max(1, Math.ceil((NEEDS.eatTarget - pawn.needs.food) / value));
           eaten = Math.min(bush.berries, need);
           bush.berries -= eaten;
           if (bush.regrow <= 0) bush.regrow = BUSH_REGROW_TICKS;
         }
       } else {
-        eaten = world.items.take(idx, need);
+        const stack = world.items.stacks.get(idx);
+        if (stack && isFood(stack.kind)) {
+          value = FOOD_VALUE[stack.kind];
+          const need = Math.max(1, Math.ceil((NEEDS.eatTarget - pawn.needs.food) / value));
+          eaten = world.items.take(idx, need);
+        }
       }
-      pawn.needs.food = Math.min(100, pawn.needs.food + eaten * BERRY_FOOD);
+      pawn.needs.food = Math.min(100, pawn.needs.food + eaten * value);
       endJob(world, pawn);
       return;
     }
     case 'haul':
+    case 'deliver':
       if (job.phase === 'act') pickUp(world, pawn, job);
-      else dropAtDest(world, pawn);
+      else dropAtDest(world, pawn, job);
       return;
     default:
       return;
@@ -492,7 +742,18 @@ function pickUp(world: World, pawn: Pawn, job: Job): void {
     endJob(world, pawn);
     return;
   }
-  const amount = Math.min(stack.count, CARRY_MAX, world.items.roomAt(destIdx, stack.kind));
+  let limit: number;
+  if (job.kind === 'deliver') {
+    const bp = world.blueprints.get(destIdx);
+    if (!bp) {
+      endJob(world, pawn);
+      return;
+    }
+    limit = BUILD[bp.kind].count - bp.delivered;
+  } else {
+    limit = world.items.roomAt(destIdx, stack.kind);
+  }
+  const amount = Math.min(stack.count, CARRY_MAX, limit);
   if (amount <= 0) {
     endJob(world, pawn);
     return;
@@ -512,14 +773,45 @@ function pickUp(world: World, pawn: Pawn, job: Job): void {
   job.duration = 0;
 }
 
-function dropAtDest(world: World, pawn: Pawn): void {
-  const job = pawn.job!;
+function dropAtDest(world: World, pawn: Pawn, job: Job): void {
   const c = pawn.carrying;
   if (c) {
     const dest = job.dest!;
-    world.items.drop(c.kind, c.count, dest.x, dest.y);
+    let left = c.count;
+    if (job.kind === 'deliver') {
+      const bp = world.blueprints.get(idxOf(world, dest));
+      if (bp) {
+        const add = Math.min(left, BUILD[bp.kind].count - bp.delivered);
+        bp.delivered += add;
+        left -= add;
+      }
+    }
+    if (left > 0) world.items.drop(c.kind, left, dest.x, dest.y);
     pawn.carrying = null;
   }
+  endJob(world, pawn);
+}
+
+/** Стоит ли кто-то в клетке (или входит в неё): стену туда ставить нельзя. */
+function occupied(world: World, x: number, y: number): boolean {
+  return world.pawns.some((p) => (p.cx === x && p.cy === y) || (p.path[0]?.x === x && p.path[0]?.y === y));
+}
+
+function actBuild(world: World, pawn: Pawn, job: Job): void {
+  const idx = idxOf(world, job.target);
+  const bp = world.blueprints.get(idx)!;
+  if (bp.work < 1) {
+    bp.work = Math.min(1, bp.work + workSpeed(pawn, 'construction') / BUILD[bp.kind].ticks);
+    job.progress = bp.work;
+    return;
+  }
+  // Работа готова; стену или плиту нельзя ставить, пока в клетке кто-то стоит.
+  if (blocksMovement(bp.kind) && occupied(world, job.target.x, job.target.y)) {
+    job.wait = (job.wait ?? 0) + 1;
+    if (job.wait > BUILD_WAIT_LIMIT) endJob(world, pawn);
+    return;
+  }
+  world.completeBlueprint(idx);
   endJob(world, pawn);
 }
 
@@ -537,8 +829,18 @@ export function runJob(world: World, pawn: Pawn): void {
   }
 
   if (job.phase === 'move' || job.phase === 'move2') {
+    // Путь мог перекрыть новый чертёж/стена — тогда задачу придётся выбрать заново.
+    if (pawn.path.some((c) => !world.map.isPassable(c.x, c.y))) {
+      endJob(world, pawn);
+      return;
+    }
     stepMovement(pawn, world.map);
     if (pawn.path.length === 0 && pawn.t === 0) arrive(world, pawn, job);
+    return;
+  }
+
+  if (job.kind === 'build') {
+    actBuild(world, pawn, job);
     return;
   }
 

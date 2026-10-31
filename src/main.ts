@@ -1,13 +1,15 @@
 import { registerSW } from 'virtual:pwa-register';
 import { attachGestures } from './input/gestures';
 import { Camera } from './render/camera';
-import { Renderer, type DrawRect } from './render/renderer';
+import { isBuildTool, TOOL_COLORS, type Tool } from './input/tools';
+import { Renderer, type View } from './render/renderer';
 import { clearGame, loadGame, saveGame } from './save/storage';
 import { DAY_TICKS, MAX_TICKS_PER_FRAME, SPEED_MULTIPLIERS, TICK_MS } from './sim/balance';
+import { cellsOf, shapeOf } from './sim/build';
 import { Terrain } from './sim/map';
 import { restoreWorld, serializeWorld } from './sim/serialize';
 import { World, gameTime } from './sim/world';
-import { Hud, type OrderMode } from './ui/hud';
+import { Hud } from './ui/hud';
 import { TopBar } from './ui/topbar';
 
 registerSW({ immediate: true });
@@ -46,8 +48,8 @@ window.addEventListener('pagehide', () => void save());
 let lastDay = Math.floor(world.tickCount / DAY_TICKS);
 
 let selectedId: number | null = null;
-let orderMode: OrderMode | null = null;
-let preview: DrawRect | null = null;
+let tool: Tool | null = null;
+let preview: View['preview'] = null;
 let drawFrom: { x: number; y: number } | null = null;
 
 // --- скорость ---
@@ -83,9 +85,9 @@ function centerOn(id: number): void {
 const hud = new Hud(document.getElementById('hud') as HTMLElement, world, {
   onSelectPawn: select,
   onCenterPawn: centerOn,
-  onOrderMode: (m) => {
-    orderMode = m;
-    gestures.draw = m !== null;
+  onTool: (t) => {
+    tool = t;
+    gestures.draw = t !== null;
     preview = null;
     drawFrom = null;
   },
@@ -135,15 +137,32 @@ function pawnAt(sx: number, sy: number): number | null {
   return best;
 }
 
-const ORDER_EMPTY: Record<OrderMode, string> = {
+const TOOL_EMPTY: Record<Tool, string> = {
   chop: 'Здесь нет деревьев',
   mine: 'Здесь нет камня',
   zone: 'Сюда нельзя положить склад',
+  garden: 'Здесь нельзя разметить огород',
+  deconstruct: 'Здесь нечего разбирать',
   erase: 'Здесь нечего стирать',
+  wall: 'Здесь нельзя строить',
+  door: 'Здесь нельзя строить',
+  floor: 'Здесь нельзя строить',
+  bed: 'Здесь нельзя строить',
+  stove: 'Здесь нельзя строить',
 };
 
-function applyArea(mode: OrderMode, a: { x: number; y: number }, b: { x: number; y: number }): void {
-  if (world.applyOrder(mode, a.x, a.y, b.x, b.y) === 0) hud.showToast(ORDER_EMPTY[mode]);
+type Cell = { x: number; y: number };
+
+/** Клетки области: стены — линией, остальное — прямоугольником. */
+function areaCells(t: Tool, a: Cell, b: Cell): Cell[] {
+  return cellsOf(isBuildTool(t) ? shapeOf(t) : 'rect', a.x, a.y, b.x, b.y);
+}
+
+function applyArea(t: Tool, a: Cell, b: Cell): void {
+  const cells = areaCells(t, a, b);
+  const changed = isBuildTool(t) ? world.placeBlueprints(t, cells) : world.applyOrder(t, a.x, a.y, b.x, b.y);
+  if (changed === 0) hud.showToast(TOOL_EMPTY[t]);
+  else if (isBuildTool(t) && changed < cells.length) hud.showToast('Часть клеток занята — там чертежа нет');
 }
 
 const gestures = attachGestures(canvas, {
@@ -154,9 +173,9 @@ const gestures = attachGestures(canvas, {
   },
   onTap: (sx, sy) => {
     hud.hideMenu();
-    if (orderMode) {
+    if (tool) {
       const c = cellAt(sx, sy);
-      applyArea(orderMode, c, c);
+      applyArea(tool, c, c);
       return;
     }
     select(pawnAt(sx, sy)); // тап по пустому месту снимает выделение
@@ -186,10 +205,16 @@ const gestures = attachGestures(canvas, {
     }
     const t = world.map.get(c.x, c.y);
     const d = world.designations.get(idx);
+    const cancel = () => void world.applyOrder('erase', c.x, c.y, c.x, c.y);
     if (t === Terrain.Tree || t === Terrain.Stone) {
-      const mode: OrderMode = t === Terrain.Tree ? 'chop' : 'mine';
-      if (d) items.push({ label: 'Отменить приказ', action: () => void world.applyOrder('erase', c.x, c.y, c.x, c.y) });
-      else items.push({ label: t === Terrain.Tree ? 'Рубить' : 'Добывать', action: () => void world.applyOrder(mode, c.x, c.y, c.x, c.y) });
+      const order = t === Terrain.Tree ? 'chop' : 'mine';
+      if (d) items.push({ label: 'Отменить приказ', action: cancel });
+      else items.push({ label: t === Terrain.Tree ? 'Рубить' : 'Добывать', action: () => void world.applyOrder(order, c.x, c.y, c.x, c.y) });
+    }
+    if (world.blueprints.has(idx)) items.push({ label: 'Отменить чертёж', action: cancel });
+    else if (world.hasBuilt(idx)) {
+      if (d === 'deconstruct') items.push({ label: 'Отменить разборку', action: cancel });
+      else items.push({ label: 'Разобрать', action: () => void world.applyOrder('deconstruct', c.x, c.y, c.x, c.y) });
     }
     hud.showMenu(sx, sy, items);
   },
@@ -197,12 +222,11 @@ const gestures = attachGestures(canvas, {
     drawFrom = cellAt(sx, sy);
   },
   onDrawMove: (sx, sy) => {
-    if (!drawFrom || !orderMode) return;
-    const c = cellAt(sx, sy);
-    preview = { order: orderMode, x0: drawFrom.x, y0: drawFrom.y, x1: c.x, y1: c.y };
+    if (!drawFrom || !tool) return;
+    preview = { color: TOOL_COLORS[tool], cells: areaCells(tool, drawFrom, cellAt(sx, sy)) };
   },
   onDrawEnd: (sx, sy) => {
-    if (drawFrom && orderMode) applyArea(orderMode, drawFrom, cellAt(sx, sy));
+    if (drawFrom && tool) applyArea(tool, drawFrom, cellAt(sx, sy));
     drawFrom = null;
     preview = null;
   },

@@ -1,8 +1,10 @@
 import type { Camera } from './camera';
-import { BUSH_MAX_BERRIES } from '../sim/balance';
+import { BUILD, BUSH_MAX_BERRIES, CROP } from '../sim/balance';
+import { kindOfStructure, type BuildKind } from '../sim/build';
 import type { ItemKind } from '../sim/items';
 import { Terrain, type GameMap } from '../sim/map';
-import type { Order, World } from '../sim/world';
+import type { Point } from '../sim/pathfinding';
+import type { World } from '../sim/world';
 
 const TILE = 32; // размер клетки в офскрин-текстуре
 
@@ -14,6 +16,8 @@ const COLORS = {
   stone: '#3A3A3C',
   tree: '#1F3A1D',
   treeHi: '#2A5026',
+  wall: '#6B6560',
+  floor: '#5C4A36',
   accent: '#E8A33D',
   blueprint: '#5AA9E6',
   good: '#8FBF5A',
@@ -21,26 +25,57 @@ const COLORS = {
   berry: '#D8524A',
 } as const;
 
-const ITEM_COLORS: Record<ItemKind, string> = { wood: '#9A6B43', stone: '#9A9AA0', berries: '#D8524A' };
-const ORDER_COLORS: Record<Order, string> = {
-  chop: COLORS.blueprint,
-  mine: COLORS.accent,
-  zone: COLORS.good,
-  erase: '#F08A7E',
-};
-
-export interface DrawRect {
-  order: Order;
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-}
-
+const ITEM_COLORS: Record<ItemKind, string> = { wood: '#9A6B43', stone: '#9A9AA0', berries: '#D8524A', rice: '#E8D9A0' };
 export interface View {
   selectedId: number | null;
-  /** Область, которую сейчас рисует игрок (клетки, границы включительно). */
-  preview: DrawRect | null;
+  /** Область, которую сейчас рисует игрок. */
+  preview: { color: string; cells: readonly Point[] } | null;
+}
+
+/** Рисует постройку в квадрате со стороной s (используется и для текстуры, и для «призраков» чертежей). */
+function drawStructure(ctx: CanvasRenderingContext2D, kind: BuildKind, x: number, y: number, s: number): void {
+  switch (kind) {
+    case 'floor':
+      ctx.fillStyle = COLORS.floor;
+      ctx.fillRect(x, y, s, s);
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+      ctx.lineWidth = Math.max(1, s * 0.03);
+      ctx.strokeRect(x + s * 0.04, y + s * 0.04, s * 0.92, s * 0.92);
+      return;
+    case 'wall':
+      ctx.fillStyle = COLORS.wall;
+      ctx.fillRect(x, y, s, s);
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.fillRect(x + s * 0.1, y + s * 0.1, s * 0.8, s * 0.8);
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = Math.max(1, s * 0.05);
+      ctx.strokeRect(x, y, s, s);
+      return;
+    case 'door':
+      ctx.fillStyle = '#8B6B43';
+      ctx.fillRect(x + s * 0.08, y + s * 0.3, s * 0.84, s * 0.4);
+      ctx.fillStyle = '#E8D9A0';
+      ctx.beginPath();
+      ctx.arc(x + s * 0.72, y + s * 0.5, s * 0.05, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    case 'bed':
+      ctx.fillStyle = '#6E5380';
+      ctx.fillRect(x + s * 0.14, y + s * 0.1, s * 0.72, s * 0.8);
+      ctx.fillStyle = '#E8E6E1';
+      ctx.fillRect(x + s * 0.2, y + s * 0.15, s * 0.6, s * 0.22);
+      return;
+    case 'stove':
+      ctx.fillStyle = '#3B3F44';
+      ctx.fillRect(x + s * 0.08, y + s * 0.08, s * 0.84, s * 0.84);
+      ctx.fillStyle = '#6B6560';
+      for (const [cx, cy] of [[0.32, 0.32], [0.68, 0.32], [0.32, 0.68], [0.68, 0.68]] as const) {
+        ctx.beginPath();
+        ctx.arc(x + s * cx, y + s * cy, s * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+  }
 }
 
 function paintCell(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: number): void {
@@ -60,6 +95,10 @@ function paintCell(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: nu
     ctx.arc(px + TILE * 0.42, py + TILE * 0.4, TILE * 0.18, 0, Math.PI * 2);
     ctx.fill();
   }
+  const i = y * map.width + x;
+  if (map.floor[i]) drawStructure(ctx, 'floor', px, py, TILE);
+  const built = kindOfStructure(map.structure[i]!);
+  if (built) drawStructure(ctx, built, px, py, TILE);
 }
 
 function buildTerrainTexture(map: GameMap): HTMLCanvasElement {
@@ -162,7 +201,7 @@ export class Renderer {
     return r.x + r.s >= 0 && r.y + r.s >= 0 && r.x <= this.viewW && r.y <= this.viewH;
   }
 
-  /** Склад-зона и приказы на деревья/камень. */
+  /** Склад, огород, приказы, чертежи и посевы. */
   private drawOverlays(world: World, cam: Camera, _view: View): void {
     const ctx = this.ctx;
     ctx.fillStyle = 'rgba(143,191,90,0.16)';
@@ -170,15 +209,60 @@ export class Renderer {
       const r = this.cellRect(cam, idx);
       if (this.visible(r)) ctx.fillRect(r.x, r.y, r.s, r.s);
     }
+    ctx.fillStyle = 'rgba(201,180,88,0.18)';
+    for (const idx of world.garden) {
+      const r = this.cellRect(cam, idx);
+      if (this.visible(r)) ctx.fillRect(r.x, r.y, r.s, r.s);
+    }
+
+    // посевы
+    for (const [idx, c] of world.map.crops) {
+      const r = this.cellRect(cam, idx);
+      if (!this.visible(r)) continue;
+      const f = Math.min(1, c.growth / CROP.growTicks);
+      const cx = r.x + r.s / 2;
+      const cy = r.y + r.s / 2;
+      ctx.fillStyle = f >= 1 ? '#E8D9A0' : '#6FA64A';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r.s * (0.08 + 0.26 * f), 0, Math.PI * 2);
+      ctx.fill();
+      if (f >= 1) {
+        ctx.strokeStyle = '#B9A55E';
+        ctx.lineWidth = Math.max(1, r.s * 0.05);
+        ctx.stroke();
+      }
+    }
+
+    // приказы на деревья, камень, разборку
     ctx.lineWidth = 2;
     for (const [idx, d] of world.designations) {
       const r = this.cellRect(cam, idx);
       if (!this.visible(r)) continue;
-      const color = d === 'chop' ? COLORS.blueprint : COLORS.accent;
-      ctx.fillStyle = d === 'chop' ? 'rgba(90,169,230,0.28)' : 'rgba(232,163,61,0.28)';
+      const color = d === 'chop' ? COLORS.blueprint : d === 'mine' ? COLORS.accent : '#F08A7E';
+      ctx.fillStyle = d === 'chop' ? 'rgba(90,169,230,0.28)' : d === 'mine' ? 'rgba(232,163,61,0.28)' : 'rgba(240,138,126,0.30)';
       ctx.fillRect(r.x, r.y, r.s, r.s);
       ctx.strokeStyle = color;
       ctx.strokeRect(r.x + 2, r.y + 2, r.s - 4, r.s - 4);
+    }
+
+    // чертежи: полупрозрачная постройка, пунктир и полоска прогресса
+    for (const [idx, bp] of world.blueprints) {
+      const r = this.cellRect(cam, idx);
+      if (!this.visible(r)) continue;
+      ctx.globalAlpha = 0.5;
+      drawStructure(ctx, bp.kind, r.x, r.y, r.s);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = COLORS.blueprint;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([r.s * 0.18, r.s * 0.12]);
+      ctx.strokeRect(r.x + 1.5, r.y + 1.5, r.s - 3, r.s - 3);
+      ctx.setLineDash([]);
+      const need = BUILD[bp.kind].count;
+      const frac = bp.delivered < need ? bp.delivered / need : bp.work;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(r.x + 2, r.y + r.s - 6, r.s - 4, 4);
+      ctx.fillStyle = bp.delivered < need ? COLORS.blueprint : COLORS.accent;
+      ctx.fillRect(r.x + 2, r.y + r.s - 6, (r.s - 4) * frac, 4);
     }
   }
 
@@ -293,20 +377,21 @@ export class Renderer {
 
   private drawPreview(cam: Camera, view: View): void {
     const pr = view.preview;
-    if (!pr) return;
+    if (!pr || pr.cells.length === 0) return;
     const ctx = this.ctx;
-    const x0 = Math.min(pr.x0, pr.x1);
-    const y0 = Math.min(pr.y0, pr.y1);
-    const x1 = Math.max(pr.x0, pr.x1) + 1;
-    const y1 = Math.max(pr.y0, pr.y1) + 1;
-    const a = cam.worldToScreen(x0, y0);
-    const b = cam.worldToScreen(x1, y1);
-    ctx.fillStyle = ORDER_COLORS[pr.order];
-    ctx.globalAlpha = 0.25;
-    ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    const z = cam.zoom;
+    ctx.fillStyle = pr.color;
+    ctx.globalAlpha = 0.3;
+    for (const c of pr.cells) {
+      const p = cam.worldToScreen(c.x, c.y);
+      ctx.fillRect(p.x, p.y, z, z);
+    }
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = ORDER_COLORS[pr.order];
+    ctx.strokeStyle = pr.color;
     ctx.lineWidth = 2;
-    ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    for (const c of pr.cells) {
+      const p = cam.worldToScreen(c.x, c.y);
+      ctx.strokeRect(p.x + 1, p.y + 1, z - 2, z - 2);
+    }
   }
 }
