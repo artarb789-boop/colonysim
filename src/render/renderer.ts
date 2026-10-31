@@ -1,33 +1,19 @@
-import type { Camera } from './camera';
 import { BUILD, BUSH_MAX_BERRIES, CROP } from '../sim/balance';
-import { kindOfStructure, type BuildKind } from '../sim/build';
-import type { ItemKind } from '../sim/items';
-import { Terrain, type GameMap } from '../sim/map';
-import type { Point } from '../sim/pathfinding';
 import { jobFraction } from '../sim/jobs';
-import { hash2 } from '../sim/rng';
+import type { Point } from '../sim/pathfinding';
+import type { GameMap } from '../sim/map';
 import type { World } from '../sim/world';
-
-const TILE = 32; // размер клетки в офскрин-текстуре
+import type { Camera } from './camera';
+import type { Frame } from './pawnArt';
+import { BERRY_SPOTS, TILE, bushSprite, cropSprite, itemSprite, paintCell, pawnSprite, structureSprite } from './sprites';
 
 const COLORS = {
   bg: '#14171A',
-  grass: '#2F4A2B',
-  dirt: '#4A3D2C',
-  water: '#1F4E6B',
-  stone: '#3A3A3C',
-  tree: '#1F3A1D',
-  treeHi: '#2A5026',
-  wall: '#6B6560',
-  floor: '#5C4A36',
   accent: '#E8A33D',
   blueprint: '#5AA9E6',
   good: '#8FBF5A',
-  bush: '#3C6B34',
-  berry: '#D8524A',
 } as const;
 
-const ITEM_COLORS: Record<ItemKind, string> = { wood: '#9A6B43', stone: '#9A9AA0', berries: '#D8524A', rice: '#E8D9A0', meal: '#E0A458', silver: '#D5DAE0' };
 export interface View {
   selectedId: number | null;
   /** Область, которую сейчас рисует игрок. */
@@ -38,180 +24,6 @@ export interface View {
   darkness: number;
   /** Цвет сезонного оттенка или null. */
   tint: string | null;
-}
-
-/** Рисует постройку в квадрате со стороной s (используется и для текстуры, и для «призраков» чертежей). */
-function drawStructure(ctx: CanvasRenderingContext2D, kind: BuildKind, x: number, y: number, s: number): void {
-  switch (kind) {
-    case 'floor':
-      ctx.fillStyle = COLORS.floor;
-      ctx.fillRect(x, y, s, s);
-      ctx.strokeStyle = 'rgba(0,0,0,0.22)';
-      ctx.lineWidth = Math.max(1, s * 0.03);
-      ctx.strokeRect(x + s * 0.04, y + s * 0.04, s * 0.92, s * 0.92);
-      return;
-    case 'wall':
-      ctx.fillStyle = COLORS.wall;
-      ctx.fillRect(x, y, s, s);
-      ctx.fillStyle = 'rgba(255,255,255,0.10)';
-      ctx.fillRect(x + s * 0.1, y + s * 0.1, s * 0.8, s * 0.8);
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.lineWidth = Math.max(1, s * 0.05);
-      ctx.strokeRect(x, y, s, s);
-      return;
-    case 'door':
-      ctx.fillStyle = '#8B6B43';
-      ctx.fillRect(x + s * 0.08, y + s * 0.3, s * 0.84, s * 0.4);
-      ctx.fillStyle = '#E8D9A0';
-      ctx.beginPath();
-      ctx.arc(x + s * 0.72, y + s * 0.5, s * 0.05, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    case 'bed':
-      ctx.fillStyle = '#6E5380';
-      ctx.fillRect(x + s * 0.14, y + s * 0.1, s * 0.72, s * 0.8);
-      ctx.fillStyle = '#E8E6E1';
-      ctx.fillRect(x + s * 0.2, y + s * 0.15, s * 0.6, s * 0.22);
-      return;
-    case 'stove':
-      ctx.fillStyle = '#3B3F44';
-      ctx.fillRect(x + s * 0.08, y + s * 0.08, s * 0.84, s * 0.84);
-      ctx.fillStyle = '#6B6560';
-      for (const [cx, cy] of [[0.32, 0.32], [0.68, 0.32], [0.32, 0.68], [0.68, 0.68]] as const) {
-        ctx.beginPath();
-        ctx.arc(x + s * cx, y + s * cy, s * 0.12, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      return;
-  }
-}
-
-function isStoneAt(map: GameMap, x: number, y: number): boolean {
-  return map.inBounds(x, y) && map.get(x, y) === Terrain.Stone;
-}
-
-/** Камень с объёмом: фаски, выступающие края и случайные трещины; свет сверху-слева. */
-function paintStone(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: number): void {
-  const px = x * TILE;
-  const py = y * TILE;
-  const h = hash2(x, y, 77);
-  const tone = Math.round((h - 0.5) * 16);
-  ctx.fillStyle = `rgb(${58 + tone},${58 + tone},${61 + tone})`;
-  ctx.fillRect(px, py, TILE, TILE);
-
-  // две крупные грани: светлая сверху-слева, тёмная снизу-справа (разная диагональ у разных клеток)
-  const flip = hash2(x, y, 78) > 0.5;
-  ctx.fillStyle = 'rgba(255,255,255,0.07)';
-  ctx.beginPath();
-  if (flip) {
-    ctx.moveTo(px, py);
-    ctx.lineTo(px + TILE, py);
-    ctx.lineTo(px, py + TILE);
-  } else {
-    ctx.moveTo(px, py);
-    ctx.lineTo(px + TILE * 0.75, py);
-    ctx.lineTo(px, py + TILE * 0.75);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = 'rgba(0,0,0,0.12)';
-  ctx.beginPath();
-  ctx.moveTo(px + TILE, py + TILE);
-  ctx.lineTo(px + TILE, py + (flip ? 0 : TILE * 0.25));
-  ctx.lineTo(px + (flip ? 0 : TILE * 0.25), py + TILE);
-  ctx.closePath();
-  ctx.fill();
-
-  // трещины
-  if (hash2(x, y, 79) > 0.45) {
-    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
-    ctx.lineWidth = 1.2;
-    const x0 = px + TILE * (0.2 + 0.4 * hash2(x, y, 80));
-    const y0 = py + TILE * (0.2 + 0.3 * hash2(x, y, 81));
-    ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x0 + TILE * 0.22, y0 + TILE * 0.18);
-    ctx.lineTo(x0 + TILE * 0.18, y0 + TILE * 0.4);
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
-    ctx.beginPath();
-    ctx.moveTo(x0 + 1.5, y0 + 1);
-    ctx.lineTo(x0 + TILE * 0.22 + 1.5, y0 + TILE * 0.18 + 1);
-    ctx.stroke();
-  }
-
-  // края, обращённые к открытой местности: светлая фаска сверху/слева, тёмная тень снизу/справа
-  const up = !isStoneAt(map, x, y - 1);
-  const left = !isStoneAt(map, x - 1, y);
-  const down = !isStoneAt(map, x, y + 1);
-  const right = !isStoneAt(map, x + 1, y);
-  if (up) {
-    ctx.fillStyle = 'rgba(255,255,255,0.26)';
-    ctx.fillRect(px, py, TILE, 4);
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(px, py + 4, TILE, 3);
-  }
-  if (left) {
-    ctx.fillStyle = 'rgba(255,255,255,0.16)';
-    ctx.fillRect(px, py, 3, TILE);
-  }
-  if (down) {
-    ctx.fillStyle = 'rgba(0,0,0,0.42)';
-    ctx.fillRect(px, py + TILE - 7, TILE, 7);
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    ctx.fillRect(px, py + TILE - 11, TILE, 4);
-  }
-  if (right) {
-    ctx.fillStyle = 'rgba(0,0,0,0.32)';
-    ctx.fillRect(px + TILE - 5, py, 5, TILE);
-  }
-}
-
-/** Тень, которую соседний камень (сверху или слева) отбрасывает на эту клетку. */
-function paintStoneShadow(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: number): void {
-  const px = x * TILE;
-  const py = y * TILE;
-  if (isStoneAt(map, x, y - 1)) {
-    const g = ctx.createLinearGradient(0, py, 0, py + TILE * 0.45);
-    g.addColorStop(0, 'rgba(0,0,0,0.38)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(px, py, TILE, TILE * 0.45);
-  }
-  if (isStoneAt(map, x - 1, y)) {
-    const g = ctx.createLinearGradient(px, 0, px + TILE * 0.35, 0);
-    g.addColorStop(0, 'rgba(0,0,0,0.28)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(px, py, TILE * 0.35, TILE);
-  }
-}
-
-function paintCell(ctx: CanvasRenderingContext2D, map: GameMap, x: number, y: number): void {
-  const t = map.get(x, y);
-  const px = x * TILE;
-  const py = y * TILE;
-  if (t === Terrain.Stone) {
-    paintStone(ctx, map, x, y);
-    return;
-  }
-  ctx.fillStyle = t === Terrain.Dirt ? COLORS.dirt : t === Terrain.Water ? COLORS.water : COLORS.grass;
-  ctx.fillRect(px, py, TILE, TILE);
-  if (t !== Terrain.Water) paintStoneShadow(ctx, map, x, y);
-  if (t === Terrain.Tree) {
-    ctx.fillStyle = COLORS.tree;
-    ctx.beginPath();
-    ctx.arc(px + TILE / 2, py + TILE / 2, TILE * 0.38, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = COLORS.treeHi;
-    ctx.beginPath();
-    ctx.arc(px + TILE * 0.42, py + TILE * 0.4, TILE * 0.18, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  const i = y * map.width + x;
-  if (map.floor[i]) drawStructure(ctx, 'floor', px, py, TILE);
-  const built = kindOfStructure(map.structure[i]!);
-  if (built) drawStructure(ctx, built, px, py, TILE);
 }
 
 function buildTerrainTexture(map: GameMap): HTMLCanvasElement {
@@ -248,6 +60,14 @@ export class Renderer {
     this.canvas.style.height = `${h}px`;
   }
 
+  /**
+   * Пиксель-арт при дробном масштабе размывается билинейно из 3×-текстуры (мягкий пиксель),
+   * а при кратном или большом — рисуется чётко.
+   */
+  private smooth(z: number): boolean {
+    return z < TILE && z % 16 !== 0;
+  }
+
   /** alpha ∈ [0,1] — доля прошедшего времени до следующего тика (интерполяция). */
   draw(world: World, cam: Camera, alpha: number, view: View): void {
     const ctx = this.ctx;
@@ -262,7 +82,9 @@ export class Renderer {
       }
       for (const idx of todo) {
         const x = idx % this.map.width;
-        paintCell(this.terrainCtx, this.map, x, (idx - x) / this.map.width);
+        const y = (idx - x) / this.map.width;
+        this.terrainCtx.clearRect(x * TILE, y * TILE, TILE, TILE);
+        paintCell(this.terrainCtx, this.map, x, y);
       }
     }
     const dpr = this.canvas.width / this.viewW;
@@ -275,18 +97,18 @@ export class Renderer {
     const mapPxW = world.map.width * z;
     const mapPxH = world.map.height * z;
 
-    ctx.imageSmoothingEnabled = z < TILE;
+    ctx.imageSmoothingEnabled = this.smooth(z);
     ctx.drawImage(this.terrain, origin.x, origin.y, mapPxW, mapPxH);
 
-    // Сетка при достаточном масштабе — только по видимой части.
-    if (z >= 20) {
+    // Сетка — едва заметная, только при крупном масштабе: в пиксель-арте клетки и так видны.
+    if (z >= 40) {
       const tl = cam.screenToWorld(0, 0);
       const br = cam.screenToWorld(this.viewW, this.viewH);
       const x0 = Math.max(0, Math.floor(tl.x));
       const x1 = Math.min(world.map.width, Math.ceil(br.x));
       const y0 = Math.max(0, Math.floor(tl.y));
       const y1 = Math.min(world.map.height, Math.ceil(br.y));
-      ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.10)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let x = x0; x <= x1; x++) {
@@ -306,6 +128,7 @@ export class Renderer {
     ctx.lineWidth = 2;
     ctx.strokeRect(origin.x, origin.y, mapPxW, mapPxH);
 
+    ctx.imageSmoothingEnabled = this.smooth(z);
     this.drawOverlays(world, cam, view);
     this.drawBedOwners(world, cam);
     this.drawBushes(world, cam);
@@ -334,9 +157,9 @@ export class Renderer {
   }
 
   /** Склад, огород, приказы, чертежи и посевы. */
-  private drawOverlays(world: World, cam: Camera, _view: View): void {
+  private drawOverlays(world: World, cam: Camera, view: View): void {
     const ctx = this.ctx;
-    if (_view.showRooms) {
+    if (view.showRooms) {
       ctx.fillStyle = 'rgba(90,169,230,0.13)';
       for (const room of world.rooms().rooms) {
         for (const idx of room.cells) {
@@ -356,22 +179,12 @@ export class Renderer {
       if (this.visible(r)) ctx.fillRect(r.x, r.y, r.s, r.s);
     }
 
-    // посевы
+    // посевы: три стадии роста
     for (const [idx, c] of world.map.crops) {
       const r = this.cellRect(cam, idx);
       if (!this.visible(r)) continue;
-      const f = Math.min(1, c.growth / CROP.growTicks);
-      const cx = r.x + r.s / 2;
-      const cy = r.y + r.s / 2;
-      ctx.fillStyle = f >= 1 ? '#E8D9A0' : '#6FA64A';
-      ctx.beginPath();
-      ctx.arc(cx, cy, r.s * (0.08 + 0.26 * f), 0, Math.PI * 2);
-      ctx.fill();
-      if (f >= 1) {
-        ctx.strokeStyle = '#B9A55E';
-        ctx.lineWidth = Math.max(1, r.s * 0.05);
-        ctx.stroke();
-      }
+      const f = c.growth / CROP.growTicks;
+      ctx.drawImage(cropSprite(f >= 1 ? 2 : f >= 0.4 ? 1 : 0), r.x, r.y, r.s, r.s);
     }
 
     // приказы на деревья, камень, разборку
@@ -380,7 +193,7 @@ export class Renderer {
       const r = this.cellRect(cam, idx);
       if (!this.visible(r)) continue;
       const color = d === 'chop' ? COLORS.blueprint : d === 'mine' ? COLORS.accent : '#F08A7E';
-      ctx.fillStyle = d === 'chop' ? 'rgba(90,169,230,0.28)' : d === 'mine' ? 'rgba(232,163,61,0.28)' : 'rgba(240,138,126,0.30)';
+      ctx.fillStyle = d === 'chop' ? 'rgba(90,169,230,0.30)' : d === 'mine' ? 'rgba(232,163,61,0.30)' : 'rgba(240,138,126,0.32)';
       ctx.fillRect(r.x, r.y, r.s, r.s);
       ctx.strokeStyle = color;
       ctx.strokeRect(r.x + 2, r.y + 2, r.s - 4, r.s - 4);
@@ -391,7 +204,7 @@ export class Renderer {
       const r = this.cellRect(cam, idx);
       if (!this.visible(r)) continue;
       ctx.globalAlpha = 0.5;
-      drawStructure(ctx, bp.kind, r.x, r.y, r.s);
+      ctx.drawImage(structureSprite(bp.kind), r.x, r.y, r.s, r.s);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = COLORS.blueprint;
       ctx.lineWidth = 2;
@@ -415,69 +228,29 @@ export class Renderer {
       const r = this.cellRect(cam, p.ownedBed);
       if (!this.visible(r)) continue;
       ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(r.x + r.s * 0.22, r.y + r.s * 0.22, Math.max(2.5, r.s * 0.11), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(r.x + r.s * 0.06, r.y + r.s * 0.06, Math.max(3, r.s * 0.16), Math.max(3, r.s * 0.16));
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
       ctx.lineWidth = 1;
-      ctx.stroke();
+      ctx.strokeRect(r.x + r.s * 0.06, r.y + r.s * 0.06, Math.max(3, r.s * 0.16), Math.max(3, r.s * 0.16));
     }
-  }
-
-  /** Гранёный камень: светлая и тёмная грани. */
-  private drawRock(cx: number, cy: number, rad: number): void {
-    const ctx = this.ctx;
-    const pts: [number, number][] = [
-      [cx - rad, cy + rad * 0.2], [cx - rad * 0.55, cy - rad * 0.75], [cx + rad * 0.45, cy - rad * 0.9],
-      [cx + rad, cy - rad * 0.1], [cx + rad * 0.6, cy + rad * 0.8], [cx - rad * 0.4, cy + rad * 0.9],
-    ];
-    ctx.beginPath();
-    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-    ctx.closePath();
-    ctx.fillStyle = '#8D8D93';
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.28)';
-    ctx.beginPath();
-    ctx.moveTo(pts[0]![0], pts[0]![1]);
-    ctx.lineTo(pts[1]![0], pts[1]![1]);
-    ctx.lineTo(pts[2]![0], pts[2]![1]);
-    ctx.lineTo(cx, cy);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.30)';
-    ctx.beginPath();
-    ctx.moveTo(pts[3]![0], pts[3]![1]);
-    ctx.lineTo(pts[4]![0], pts[4]![1]);
-    ctx.lineTo(pts[5]![0], pts[5]![1]);
-    ctx.lineTo(cx, cy);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-    ctx.closePath();
-    ctx.stroke();
   }
 
   private drawBushes(world: World, cam: Camera): void {
     const ctx = this.ctx;
+    const px = cam.zoom / 16;
     for (const [idx, b] of world.map.bushes) {
       const r = this.cellRect(cam, idx);
       if (!this.visible(r)) continue;
-      const cx = r.x + r.s / 2;
-      const cy = r.y + r.s / 2;
-      ctx.fillStyle = COLORS.bush;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r.s * 0.34, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = COLORS.berry;
+      ctx.drawImage(bushSprite(), r.x, r.y, r.s, r.s);
       const shown = Math.min(b.berries, BUSH_MAX_BERRIES);
       for (let i = 0; i < shown; i++) {
-        const a = (i / BUSH_MAX_BERRIES) * Math.PI * 2 + 0.5;
-        ctx.beginPath();
-        ctx.arc(cx + Math.cos(a) * r.s * 0.2, cy + Math.sin(a) * r.s * 0.2, Math.max(1.5, r.s * 0.07), 0, Math.PI * 2);
-        ctx.fill();
+        const [bx, by] = BERRY_SPOTS[i]!;
+        ctx.fillStyle = '#9E2F2A';
+        ctx.fillRect(r.x + bx * px - px * 0.3, r.y + by * px - px * 0.3, px * 2.6, px * 2.6);
+        ctx.fillStyle = '#E4564D';
+        ctx.fillRect(r.x + bx * px, r.y + by * px, px * 2, px * 2);
+        ctx.fillStyle = '#F5A39A';
+        ctx.fillRect(r.x + bx * px, r.y + by * px, px * 0.8, px * 0.8);
       }
     }
   }
@@ -487,33 +260,17 @@ export class Renderer {
     for (const [idx, s] of world.items.stacks) {
       const r = this.cellRect(cam, idx);
       if (!this.visible(r)) continue;
-      const pad = r.s * 0.24;
-      ctx.fillStyle = ITEM_COLORS[s.kind];
-      if (s.kind === 'stone') {
-        this.drawRock(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.3);
-      } else if (s.kind === 'silver') {
-        ctx.beginPath();
-        ctx.arc(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.24, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#8E96A3';
-        ctx.lineWidth = Math.max(1, r.s * 0.05);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.13, 0, Math.PI * 2);
-        ctx.stroke();
-      } else if (s.kind === 'berries' || s.kind === 'meal') {
-        ctx.beginPath();
-        ctx.arc(r.x + r.s / 2, r.y + r.s / 2, r.s * 0.24, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.fillRect(r.x + pad, r.y + pad, r.s - pad * 2, r.s - pad * 2);
-      }
+      ctx.drawImage(itemSprite(s.kind), r.x, r.y, r.s, r.s);
       if (r.s >= 22) {
-        ctx.fillStyle = '#E8E6E1';
-        ctx.font = `600 ${Math.round(r.s * 0.34)}px ui-monospace, monospace`;
+        ctx.font = `700 ${Math.round(r.s * 0.34)}px ui-monospace, monospace`;
         ctx.textAlign = 'right';
         ctx.textBaseline = 'bottom';
-        ctx.fillText(String(s.count), r.x + r.s - 2, r.y + r.s - 1);
+        const label = String(s.count);
+        ctx.lineWidth = Math.max(2, r.s * 0.08);
+        ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+        ctx.strokeText(label, r.x + r.s - 2, r.y + r.s - 1);
+        ctx.fillStyle = '#F2EEE6';
+        ctx.fillText(label, r.x + r.s - 2, r.y + r.s - 1);
       }
     }
   }
@@ -522,7 +279,7 @@ export class Renderer {
     const ctx = this.ctx;
     const z = cam.zoom;
 
-    // Путь и цель — цвет чертежей/прогресса.
+    // Путь и цель выбранного — цвет чертежей/прогресса.
     for (const p of world.pawns) {
       if (view.selectedId !== p.id || p.path.length === 0) continue;
       const px = p.prevX + (p.x - p.prevX) * alpha;
@@ -549,61 +306,63 @@ export class Renderer {
       }
     }
 
-    // Поселенцы: цветной круг с инициалом; выбранный — с кольцом.
-    const r = z * 0.38;
-    for (const p of world.pawns) {
+    // Рисуем сверху вниз по экрану, чтобы нижние закрывали верхних.
+    const order = [...world.pawns].sort((a, b) => a.y - b.y);
+    const size = z * 1.1;
+    for (const p of order) {
       const px = p.prevX + (p.x - p.prevX) * alpha;
       const py = p.prevY + (p.y - p.prevY) * alpha;
       const ps = cam.worldToScreen(px + 0.5, py + 0.5);
+      const sleeping = p.job?.kind === 'sleep' && p.job.phase === 'act';
+      const moving = p.job !== null && (p.job.phase === 'move' || p.job.phase === 'move2') && p.path.length > 0;
+      const frame: Frame = moving ? (Math.floor((px + py) * 2.4) % 2 === 0 ? 'stepA' : 'stepB') : 'idle';
+      const bob = moving ? Math.abs(Math.sin((px + py) * Math.PI * 2.4)) * z * 0.04 : 0;
+
+      // тень и выделение у ног
+      const footY = ps.y + z * 0.36;
       if (view.selectedId === p.id) {
         ctx.strokeStyle = '#E8E6E1';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(ps.x, ps.y, r + 4, 0, Math.PI * 2);
+        ctx.ellipse(ps.x, footY, z * 0.42, z * 0.17, 0, 0, Math.PI * 2);
         ctx.stroke();
       }
-      ctx.fillStyle = p.color;
+      ctx.fillStyle = 'rgba(0,0,0,0.32)';
       ctx.beginPath();
-      ctx.arc(ps.x, ps.y, r, 0, Math.PI * 2);
+      ctx.ellipse(ps.x, footY, z * 0.3, z * 0.1, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.fillStyle = '#14171A';
-      ctx.font = `600 ${Math.round(r * 1.15)}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(p.name.charAt(0), ps.x, ps.y + r * 0.06);
-      // «нос»: треугольник на краю круга показывает, куда смотрит поселенец
-      const fx = Math.cos(p.facing);
-      const fy = Math.sin(p.facing);
-      const tip = r * 1.5;
-      const base = r * 0.92;
-      const half = r * 0.38;
-      ctx.fillStyle = '#E8E6E1';
-      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(ps.x + fx * tip, ps.y + fy * tip);
-      ctx.lineTo(ps.x + fx * base - fy * half, ps.y + fy * base + fx * half);
-      ctx.lineTo(ps.x + fx * base + fy * half, ps.y + fy * base - fx * half);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+
+      const sprite = pawnSprite(p.color, p.id, p.facing, frame);
+      if (sleeping) {
+        // спящий лежит на боку
+        ctx.save();
+        ctx.translate(ps.x, ps.y + z * 0.12);
+        ctx.rotate(-Math.PI / 2);
+        ctx.drawImage(sprite, -size / 2, -size * 0.55, size, size);
+        ctx.restore();
+        ctx.font = `700 ${Math.round(z * 0.3)}px ui-monospace, monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = '#E8E6E1';
+        ctx.fillText('z', ps.x + z * 0.25, ps.y - z * 0.2);
+      } else {
+        ctx.drawImage(sprite, ps.x - size / 2, ps.y + z * 0.36 - size * 0.92 - bob, size, size);
+      }
+
       const frac = jobFraction(p);
       if (frac !== null) {
         const bw = Math.max(18, z * 0.9);
         const bh = Math.max(3, z * 0.11);
         const bx = ps.x - bw / 2;
-        const by = ps.y - r * 1.75 - bh;
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        const by = ps.y - z * 0.78 - bh;
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
         ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
         ctx.fillStyle = COLORS.blueprint;
         ctx.fillRect(bx, by, bw * frac, bh);
       }
       if (p.carrying) {
-        ctx.fillStyle = ITEM_COLORS[p.carrying.kind];
-        ctx.fillRect(ps.x + r * 0.5, ps.y - r * 1.1, r * 0.7, r * 0.7);
+        const s = z * 0.5;
+        ctx.drawImage(itemSprite(p.carrying.kind), ps.x + z * 0.12, ps.y - z * 0.1 - bob, s, s);
       }
     }
   }
