@@ -1,0 +1,27 @@
+{
+  "name": "colonysim",
+  "version": "0.0.0",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "vite --host",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/artarb789-boop/colonysim.git"
+  },
+  "bugs": {
+    "url": "https://github.com/artarb789-boop/colonysim/issues"
+  },
+  "homepage": "https://github.com/artarb789-boop/colonysim#readme",
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.0.5"
+  },
+  "private": "true",
+  "type": "module"
+}
