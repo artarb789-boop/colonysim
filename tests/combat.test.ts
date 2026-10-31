@@ -4,7 +4,7 @@ import { hitChance, los, pickPart, weaponDef } from '../src/sim/combat';
 import { fireEvent } from '../src/sim/events';
 import { addWound } from '../src/sim/health';
 import { Structure, Terrain } from '../src/sim/map';
-import { raidSize, spawnRaid } from '../src/sim/raid';
+import { raidSize, spawnRaid, tickEnemies } from '../src/sim/raid';
 import { Rng } from '../src/sim/rng';
 import { restoreWorld, serializeWorld } from '../src/sim/serialize';
 import { World } from '../src/sim/world';
@@ -155,6 +155,49 @@ describe('бой', () => {
     expect(w.enemies.filter((e) => !e.dead && !e.downed)).toHaveLength(0);
     expect(w.story.raidActive).toBe(false);
     expect(w.story.raidsDone).toBe(1);
+  });
+
+  it('отступающий налётчик находит выход, даже если ближайшая точка края закрыта', () => {
+    const w = arena(1);
+    // Все края закрыты, кроме единственного выхода далеко от ближайшей точки.
+    for (let i = 0; i < MAP_SIZE; i++) {
+      w.map.set(i, 0, Terrain.Stone);
+      w.map.set(i, MAP_SIZE - 1, Terrain.Stone);
+      w.map.set(0, i, Terrain.Stone);
+      w.map.set(MAP_SIZE - 1, i, Terrain.Stone);
+    }
+    w.map.set(MAP_SIZE - 1, C, Terrain.Grass);
+    const e = raider(w, 2, C);
+    e.fleeing = true;
+    w.story.raidActive = true;
+    w.alarm = true;
+    w.alarmAuto = true;
+    for (let i = 0; i < 2000 && w.story.raidActive; i++) tickEnemies(w);
+    expect(w.enemies).toHaveLength(0);
+    expect(w.story.raidActive).toBe(false);
+    expect(w.story.raidsDone).toBe(1);
+    expect(w.alarm).toBe(false);
+  });
+
+  it('окружённый налётчик прекращает старый путь и уходит после открытия прохода', () => {
+    const w = arena(1);
+    const e = raider(w, C, C);
+    e.fleeing = true;
+    e.aiTimer = 0;
+    e.path = [{ x: C + 1, y: C }];
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (dx || dy) w.map.structure[idx(C + dx, C + dy)] = Structure.Wall;
+    }
+    w.story.raidActive = true;
+    tickEnemies(w);
+    expect(e.path).toEqual([]);
+    expect(e.x).toBe(C);
+    expect(e.y).toBe(C);
+    expect(w.story.raidActive).toBe(true);
+    w.map.structure[idx(C + 1, C)] = Structure.None;
+    for (let i = 0; i < 1500 && w.story.raidActive; i++) tickEnemies(w);
+    expect(w.enemies).toHaveLength(0);
+    expect(w.story.raidActive).toBe(false);
   });
 
   it('павший налётчик роняет оружие', () => {
@@ -310,3 +353,4 @@ describe('баланс боя', () => {
     expect(deaths / N).toBeLessThan(0.5);
   }, 60_000);
 });
+

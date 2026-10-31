@@ -1,7 +1,7 @@
 import { COMBAT } from './balance';
 import { engage } from './combat';
 import { createPawn, stepMovement, type Pawn } from './pawn';
-import { findPath, type Point } from './pathfinding';
+import { findPath, findPathToAny, type Point } from './pathfinding';
 import type { World } from './world';
 
 /** Визуальный эффект удара/выстрела; живёт несколько тиков, в сохранение не входит. */
@@ -66,14 +66,14 @@ export function spawnRaid(world: World, count: number, bows: number): boolean {
   return true;
 }
 
-function nearestEdge(world: World, e: Pawn): Point {
+/** Все выходы: ближайшая по прямой клетка может быть закрыта или недостижима. */
+function edgeGoals(world: World): Point[] {
   const w = world.map.width - 1;
   const h = world.map.height - 1;
-  const options: Point[] = [
-    { x: e.cx, y: 0 }, { x: e.cx, y: h }, { x: 0, y: e.cy }, { x: w, y: e.cy },
-  ];
-  options.sort((a, b) => Math.hypot(a.x - e.cx, a.y - e.cy) - Math.hypot(b.x - e.cx, b.y - e.cy));
-  return options[0]!;
+  const goals: Point[] = [];
+  for (let x = 0; x <= w; x++) goals.push({ x, y: 0 }, { x, y: h });
+  for (let y = 1; y < h; y++) goals.push({ x: 0, y }, { x: w, y });
+  return goals;
 }
 
 const onEdge = (world: World, e: Pawn): boolean =>
@@ -109,11 +109,12 @@ export function tickEnemies(world: World): void {
     if (e.fleeing) {
       if (--e.aiTimer <= 0 || e.path.length === 0) {
         e.aiTimer = 30;
-        const g = nearestEdge(world, e);
+        const goals = edgeGoals(world);
         const midStep = e.t > 0 && e.path.length > 0;
         const o = midStep ? e.path[0]! : { x: e.cx, y: e.cy };
-        const rest = findPath(world.map, o.x, o.y, g.x, g.y);
-        if (rest) e.path = midStep ? [o, ...rest] : rest;
+        const rest = findPathToAny(world.map, o.x, o.y, goals);
+        e.path = rest ? (midStep ? [o, ...rest] : rest) : midStep ? [o] : [];
+        e.target = e.path.length > 0 ? e.path[e.path.length - 1]! : null;
       }
       stepMovement(e, world.map);
       continue;
@@ -153,4 +154,5 @@ export function tickEnemies(world: World): void {
     }
   }
 }
+
 
