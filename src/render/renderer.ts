@@ -67,10 +67,6 @@ export class Renderer {
    * Пиксель-арт при дробном масштабе размывается билинейно из 3×-текстуры (мягкий пиксель),
    * а при кратном или большом — рисуется чётко.
    */
-  private smooth(z: number): boolean {
-    return z < TILE && z % 16 !== 0;
-  }
-
   /** alpha ∈ [0,1] — доля прошедшего времени до следующего тика (интерполяция). */
   draw(world: World, cam: Camera, alpha: number, view: View): void {
     const ctx = this.ctx;
@@ -100,7 +96,7 @@ export class Renderer {
     const mapPxW = world.map.width * z;
     const mapPxH = world.map.height * z;
 
-    ctx.imageSmoothingEnabled = this.smooth(z);
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(this.terrain, origin.x, origin.y, mapPxW, mapPxH);
 
     // Сетка — едва заметная, только при крупном масштабе: в пиксель-арте клетки и так видны.
@@ -131,7 +127,7 @@ export class Renderer {
     ctx.lineWidth = 2;
     ctx.strokeRect(origin.x, origin.y, mapPxW, mapPxH);
 
-    ctx.imageSmoothingEnabled = this.smooth(z);
+    ctx.imageSmoothingEnabled = true;
     this.drawOverlays(world, cam, view);
     this.drawBedOwners(world, cam);
     this.drawBushes(world, cam);

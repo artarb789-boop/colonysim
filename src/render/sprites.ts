@@ -1,9 +1,9 @@
+import { forestCell, forestPawn } from './forestArt';
 import { Terrain, type GameMap } from '../sim/map';
 import type { BuildKind } from '../sim/build';
 import { kindOfStructure } from '../sim/build';
 import type { ItemKind } from '../sim/items';
-import { hash2 } from '../sim/rng';
-import { dirOf, pawnRows, type Dir, type Frame } from './pawnArt';
+import { dirOf, type Frame } from './pawnArt';
 
 /** Один «пиксель» арта = SCALE реальных пикселей текстуры; клетка = 16 пикселей арта. */
 const SCALE = 3;
@@ -49,113 +49,6 @@ class Pix {
 }
 
 // ---------- местность ----------
-
-function hashInt(gx: number, gy: number, salt: number, n: number): number {
-  return Math.floor(hash2(gx, gy, salt) * n);
-}
-
-/** Низкоконтрастная земля: детали не спорят с фигурками и ресурсами. */
-function paintGrass(p: Pix, gx: number, gy: number): void {
-  p.rect(0, 0, 16, 16, '#3C5140');
-  for (let i = 0; i < 7; i++) {
-    const x = hashInt(gx, gy, i * 3 + 1, 15);
-    const y = hashInt(gx, gy, i * 3 + 2, 15);
-    p.rect(x, y, 2, 1, i % 2 ? '#415744' : '#354A3B');
-  }
-  const x = 2 + hashInt(gx, gy, 201, 11);
-  const y = 3 + hashInt(gx, gy, 202, 11);
-  p.px(x, y, '#283D32');
-  p.px(x - 1, y - 1, '#627956');
-  p.rect(x + 1, y - 2, 1, 2, '#536D4C');
-  if (hash2(gx, gy, 200) > 0.86) p.px(x + 3, y + 1, '#A1A478');
-}
-
-function paintDirt(p: Pix, gx: number, gy: number): void {
-  p.rect(0, 0, 16, 16, '#695842');
-  for (let i = 0; i < 9; i++) {
-    const x = hashInt(gx, gy, i * 3 + 11, 15);
-    const y = hashInt(gx, gy, i * 3 + 12, 16);
-    p.rect(x, y, 2, 1, i % 2 ? '#736149' : '#604F3E');
-  }
-  const x = 2 + hashInt(gx, gy, 211, 11);
-  const y = 2 + hashInt(gx, gy, 212, 11);
-  p.rect(x, y, 2, 1, '#968875');
-  p.rect(x, y + 1, 3, 1, '#51483B');
-}
-
-function paintWater(p: Pix, map: GameMap, gx: number, gy: number): void {
-  p.rect(0, 0, 16, 16, '#284D5C');
-  for (let i = 0; i < 3; i++) {
-    const x = hashInt(gx, gy, i * 3 + 21, 10);
-    const y = 2 + hashInt(gx, gy, i * 3 + 22, 12);
-    p.rect(x, y, 4, 1, '#315E6C');
-    p.rect(x + 1, y + 1, 5, 1, '#234551');
-    if (i === 0) p.rect(x + 1, y, 2, 1, '#52818A');
-  }
-  // Мелководье и прерывистый блик только у берега, без сетки внутри озера.
-  for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
-    if (!map.inBounds(gx + dx, gy + dy) || map.get(gx + dx, gy + dy) === Terrain.Water) continue;
-    for (let k = 0; k < 16; k++) {
-      const x = dx === 0 ? k : dx < 0 ? 0 : 15;
-      const y = dy === 0 ? k : dy < 0 ? 0 : 15;
-      p.px(x, y, '#697D70');
-      p.px(x - dx, y - dy, '#3F6C72');
-      if (k % 5 < 3) p.px(x - dx, y - dy, '#7E9A90');
-    }
-  }
-}
-
-const isStone = (map: GameMap, x: number, y: number): boolean => map.inBounds(x, y) && map.get(x, y) === Terrain.Stone;
-
-/** Камень: гранёные блоки, фаски, выступающий край, тени. Свет сверху-слева. */
-function paintStone(p: Pix, map: GameMap, gx: number, gy: number): void {
-  const t = Math.round((hash2(gx, gy, 77) - 0.5) * 10);
-  const rgb = (d: number) => `rgb(${81 + t + d},${88 + t + d},${87 + t + d})`;
-  p.rect(0, 0, 16, 16, rgb(-10));
-  // Крупные асимметричные грани вместо повторяющихся кирпичей 4×4.
-  p.rect(1, 1, 9, 5, rgb(12));
-  p.rect(2, 0, 6, 1, rgb(22));
-  p.rect(0, 2, 2, 6, rgb(4));
-  p.rect(3, 6, 7, 4, rgb(0));
-  p.rect(10, 2, 5, 7, rgb(-2));
-  p.rect(11, 3, 4, 1, rgb(10));
-  p.rect(1, 11, 8, 3, rgb(6));
-  p.rect(2, 10, 5, 1, rgb(17));
-  p.rect(10, 10, 5, 4, rgb(-17));
-  p.rect(9, 5, 1, 5, rgb(-27));
-  p.rect(7, 9, 3, 1, rgb(-27));
-  if (hash2(gx, gy, 79) > 0.5) {
-    p.rect(4, 2, 1, 2, rgb(-8));
-    p.rect(5, 4, 2, 1, rgb(-8));
-  }
-  // края, обращённые к открытой местности
-  if (!isStone(map, gx, gy - 1)) {
-    p.rect(0, 0, 16, 2, rgb(34));
-    p.rect(0, 2, 16, 1, rgb(18));
-  }
-  if (!isStone(map, gx - 1, gy)) p.rect(0, 0, 1, 16, rgb(22));
-  if (!isStone(map, gx, gy + 1)) {
-    p.rect(0, 13, 16, 1, rgb(-22));
-    p.rect(0, 14, 16, 2, rgb(-38));
-  }
-  if (!isStone(map, gx + 1, gy)) {
-    p.rect(14, 0, 1, 16, rgb(-18));
-    p.rect(15, 0, 1, 16, rgb(-34));
-  }
-}
-
-/** Тень от камня сверху/слева на соседнюю клетку. */
-function paintStoneShadow(p: Pix, map: GameMap, gx: number, gy: number): void {
-  if (isStone(map, gx, gy - 1)) {
-    p.shade(0, 0, 16, 1, 'rgba(0,0,0,0.42)');
-    p.shade(0, 1, 16, 1, 'rgba(0,0,0,0.28)');
-    p.shade(0, 2, 16, 1, 'rgba(0,0,0,0.14)');
-  }
-  if (isStone(map, gx - 1, gy)) {
-    p.shade(0, 0, 1, 16, 'rgba(0,0,0,0.32)');
-    p.shade(1, 0, 1, 16, 'rgba(0,0,0,0.16)');
-  }
-}
 
 // ---------- постройки ----------
 
@@ -242,48 +135,6 @@ function buildStructureSprite(kind: BuildKind): HTMLCanvasElement {
 }
 
 // ---------- объекты и предметы ----------
-
-function buildTree(): HTMLCanvasElement {
-  const [c, ctx] = canvas();
-  const p = new Pix(ctx);
-  p.shade(3, 13, 11, 2, 'rgba(12,23,21,0.35)');
-  p.rect(7, 9, 3, 6, '#493A2C');
-  p.rect(7, 10, 1, 4, '#A18150');
-  p.rect(6, 14, 5, 1, '#493A2C');
-  // Неровная крона из перекрывающихся масс листвы.
-  p.rect(4, 1, 7, 2, '#243D32');
-  p.rect(2, 3, 11, 6, '#243D32');
-  p.rect(1, 5, 14, 3, '#243D32');
-  p.rect(3, 9, 10, 2, '#243D32');
-  p.rect(5, 11, 6, 1, '#243D32');
-  p.rect(4, 2, 6, 3, '#6E8750');
-  p.rect(3, 4, 9, 4, '#4E7148');
-  p.rect(2, 6, 4, 2, '#62844F');
-  p.rect(6, 7, 7, 3, '#36593E');
-  p.rect(9, 4, 4, 3, '#426441');
-  p.rect(5, 1, 3, 1, '#93A568');
-  p.rect(4, 3, 2, 1, '#93A568');
-  p.rect(3, 5, 2, 1, '#80995C');
-  p.rect(7, 6, 3, 1, '#759051');
-  p.rect(5, 8, 2, 1, '#243D32');
-  p.px(11, 8, '#65864D');
-  return c;
-}
-
-function buildBush(): HTMLCanvasElement {
-  const [c, ctx] = canvas();
-  const p = new Pix(ctx);
-  p.shade(3, 13, 10, 2, 'rgba(12,23,21,0.3)');
-  p.rect(4, 6, 7, 8, '#263F32');
-  p.rect(2, 8, 11, 4, '#263F32');
-  p.rect(3, 8, 9, 4, '#4E7148');
-  p.rect(5, 6, 5, 3, '#66834F');
-  p.rect(4, 7, 2, 1, '#8D9F63');
-  p.rect(3, 9, 3, 1, '#799355');
-  p.rect(8, 11, 4, 2, '#36593E');
-  p.px(10, 8, '#8D9F63');
-  return c;
-}
 
 /** Стадии посева: 0 росток, 1 растёт, 2 созрел. */
 function buildCrop(stage: 0 | 1 | 2, herb = false): HTMLCanvasElement {
@@ -432,40 +283,6 @@ function buildItem(kind: ItemKind): HTMLCanvasElement {
 
 // ---------- поселенцы ----------
 
-const HAIR = ['#3B2A1A', '#C98A3C', '#1E1E22', '#7A3B1E', '#D8D0A0', '#5A3A6A'];
-const SKIN = ['#F0C9A0', '#D9A87A', '#B98560', '#8A5E40'];
-
-function shade(hex: string, k: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  const r = Math.min(255, Math.round(((n >> 16) & 255) * k));
-  const g = Math.min(255, Math.round(((n >> 8) & 255) * k));
-  const b = Math.min(255, Math.round((n & 255) * k));
-  return `rgb(${r},${g},${b})`;
-}
-
-function buildPawn(color: string, id: number, dir: Dir, frame: Frame): HTMLCanvasElement {
-  const [c, ctx] = canvas();
-  const p = new Pix(ctx);
-  const pal: Record<string, string> = {
-    o: '#20292B',
-    H: shade(HAIR[id % HAIR.length]!, 1.4),
-    k: shade(SKIN[id % SKIN.length]!, 0.76),
-    B: shade(color, 1.2),
-    L: '#68747A',
-    t: '#70543D',
-    h: HAIR[id % HAIR.length]!,
-    S: SKIN[id % SKIN.length]!,
-    s: SKIN[id % SKIN.length]!,
-    e: '#1A1A1E',
-    b: color,
-    a: shade(color, 0.72),
-    l: '#3A4150',
-    f: '#2A1F18',
-  };
-  pawnRows(dir, frame).forEach((row, y) => [...row].forEach((ch, x) => ch !== '.' && pal[ch] && p.px(x, y, pal[ch]!)));
-  return c;
-}
-
 // ---------- публичный интерфейс ----------
 
 const structureCache = new Map<BuildKind, HTMLCanvasElement>();
@@ -482,10 +299,8 @@ export function itemSprite(kind: ItemKind): HTMLCanvasElement {
   return s;
 }
 
-let treeSpriteCache: HTMLCanvasElement | null = null;
-export const treeSprite = (): HTMLCanvasElement => (treeSpriteCache ??= buildTree());
-let bushSpriteCache: HTMLCanvasElement | null = null;
-export const bushSprite = (): HTMLCanvasElement => (bushSpriteCache ??= buildBush());
+export const treeSprite = () => forestCell(6);
+export const bushSprite = () => forestCell(11);
 const cropCache: (HTMLCanvasElement | undefined)[] = [];
 export function cropSprite(stage: 0 | 1 | 2, herb = false): HTMLCanvasElement {
   const k = stage + (herb ? 3 : 0);
@@ -498,7 +313,7 @@ export function pawnSprite(color: string, id: number, facing: number, frame: Fra
   const dir = dirOf(facing);
   const key = `${color}|${id % 24}|${dir}|${frame}`;
   let s = pawnCache.get(key);
-  if (!s) pawnCache.set(key, (s = buildPawn(color, id, dir, frame)));
+  if (!s) pawnCache.set(key, (s = forestPawn(color, id, dir, frame)));
   return s;
 }
 
@@ -509,21 +324,26 @@ export const BERRY_SPOTS: readonly (readonly [number, number])[] = [[5, 8], [9, 
 export function paintCell(ctx: CanvasRenderingContext2D, map: GameMap, gx: number, gy: number): void {
   const ox = gx * TILE;
   const oy = gy * TILE;
-  ctx.imageSmoothingEnabled = false;
-  const p = new Pix(ctx, ox, oy);
+  ctx.imageSmoothingEnabled = true;
   const t = map.get(gx, gy);
-  if (t === Terrain.Stone) {
-    paintStone(p, map, gx, gy);
-    return;
+  const surface = t === Terrain.Water ? 10 : t === Terrain.Dirt ? 9 : 8;
+  ctx.save();
+  ctx.translate(ox + (gx % 2) * TILE, oy + (gy % 2) * TILE);
+  ctx.scale(gx % 2 ? -1 : 1, gy % 2 ? -1 : 1);
+  ctx.drawImage(forestCell(surface), 0, 0, TILE, TILE);
+  ctx.restore();
+  if (t === Terrain.Water) {
+    ctx.fillStyle = '#ab9871';
+    for (const [dx, dy] of [[0,-1], [0,1], [-1,0], [1,0]] as const) {
+      if (!map.inBounds(gx + dx, gy + dy) || map.get(gx + dx, gy + dy) === Terrain.Water) continue;
+      ctx.fillRect(ox + (dx > 0 ? TILE - 3 : 0), oy + (dy > 0 ? TILE - 3 : 0),
+        dx ? 3 : TILE, dy ? 3 : TILE);
+    }
   }
-  if (t === Terrain.Dirt) paintDirt(p, gx, gy);
-  else if (t === Terrain.Water) paintWater(p, map, gx, gy);
-  else paintGrass(p, gx, gy);
-  if (t !== Terrain.Water) paintStoneShadow(p, map, gx, gy);
-  if (t === Terrain.Tree) ctx.drawImage(treeSprite(), ox, oy);
+  if (t === Terrain.Stone) ctx.drawImage(forestCell(7), ox, oy, TILE, TILE);
+  if (t === Terrain.Tree) ctx.drawImage(treeSprite(), ox, oy, TILE, TILE);
   const i = gy * map.width + gx;
   if (map.floor[i]) ctx.drawImage(structureSprite('floor'), ox, oy);
   const built = kindOfStructure(map.structure[i]!);
   if (built) ctx.drawImage(structureSprite(built), ox, oy);
 }
-
