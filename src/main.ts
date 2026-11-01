@@ -1,3 +1,4 @@
+import { loadForestArt } from './render/forestArt';
 import { registerSW } from 'virtual:pwa-register';
 import { attachGestures } from './input/gestures';
 import { Camera } from './render/camera';
@@ -26,6 +27,7 @@ const restored = savedFile ? restoreWorld(savedFile.sim) : null;
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const world = restored ?? new World(forcedSeed ? seedParam : Date.now() % 1_000_000);
 const camera = new Camera(world.map.width, world.map.height);
+await loadForestArt();
 const renderer = new Renderer(canvas, world.map);
 if (restored && savedFile) {
   camera.zoomAt(camera.viewW / 2, camera.viewH / 2, savedFile.camera.zoom / camera.zoom);

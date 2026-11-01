@@ -15,7 +15,7 @@ describe('пиксель-арт поселенца', () => {
   });
 
   it('используются только известные символы', () => {
-    const ok = new Set('.hSebasflsl'.split(''));
+    const ok = new Set('.ohHSkeBbasflLt'.split(''));
     for (const d of dirs) for (const f of frames) for (const r of pawnRows(d, f)) for (const ch of r) expect(ok.has(ch)).toBe(true);
   });
 
@@ -54,3 +54,4 @@ describe('пиксель-арт поселенца', () => {
     expect(dirOf(-Math.PI / 4 + 0.01)).toBe('right');
   });
 });
+
